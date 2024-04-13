@@ -77,6 +77,8 @@ endif()
 
 # zstd
 
+add_library(TracyZstd STATIC)
+
 set(ZSTD_DIR "${ROOT_DIR}/zstd")
 
 set(ZSTD_SOURCES
@@ -109,18 +111,22 @@ set(ZSTD_SOURCES
     dictBuilder/cover.c
     dictBuilder/divsufsort.c
     dictBuilder/fastcover.c
-
-    # Assembly
-    decompress/huf_decompress_amd64.S
 )
+
+if(UNIX)
+    # Assembly
+    enable_language(ASM)
+    list(APPEND ZSTD_SOURCES decompress/huf_decompress_amd64.S)
+    set_property(SOURCE ${ZSTD_DIR}/decompress/huf_decompress_amd64.S APPEND PROPERTY COMPILE_OPTIONS "-x" "assembler-with-cpp")
+else()
+    # Disable ASM if platform isn't supported, as we won't be linking the assembly
+    target_compile_definitions(TracyZstd PRIVATE ZSTD_DISABLE_ASM)
+endif()
 
 list(TRANSFORM ZSTD_SOURCES PREPEND "${ZSTD_DIR}/")
 
-set_property(SOURCE ${ZSTD_DIR}/decompress/huf_decompress_amd64.S APPEND PROPERTY COMPILE_OPTIONS "-x" "assembler-with-cpp")
-
-add_library(TracyZstd STATIC ${ZSTD_SOURCES})
+target_sources(TracyZstd PRIVATE ${ZSTD_SOURCES})
 target_include_directories(TracyZstd PUBLIC ${ZSTD_DIR})
-
 
 # Diff Template Library
 
