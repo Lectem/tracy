@@ -779,6 +779,51 @@ void View::DrawLaneConfig()
     ImGui::Begin( ICON_FA_SHUFFLE " Timeline lanes", &m_showLaneConfig );
     if( ImGui::GetCurrentWindowRead()->SkipItems ) { ImGui::End(); return; }
 
+    // Presets (session only).
+    {
+        const auto& presets = m_tc.GetPresets();
+        ImGui::TextUnformatted( "Presets (session only):" );
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth( 200 * GetScale() );
+        static int selectedPreset = -1;
+        if( selectedPreset >= (int)presets.size() ) selectedPreset = -1;
+        if( ImGui::BeginCombo( "##preset", selectedPreset >= 0 ? presets[selectedPreset].name.c_str() : "(select)" ) )
+        {
+            for( size_t i = 0; i < presets.size(); ++i )
+            {
+                bool sel = (int)i == selectedPreset;
+                if( ImGui::Selectable( presets[i].name.c_str(), sel ) )
+                {
+                    selectedPreset = (int)i;
+                    m_tc.ApplyPreset( i );
+                }
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::SameLine();
+        if( ImGui::SmallButton( "Load" ) && selectedPreset >= 0 ) m_tc.ApplyPreset( selectedPreset );
+        ImGui::SameLine();
+        if( ImGui::SmallButton( "Delete" ) && selectedPreset >= 0 )
+        {
+            m_tc.DeletePreset( selectedPreset );
+            if( selectedPreset >= (int)m_tc.GetPresets().size() ) selectedPreset--;
+        }
+
+        static char presetName[64] = "";
+        ImGui::SetNextItemWidth( 200 * GetScale() );
+        ImGui::InputTextWithHint( "##newpreset", "Name for new preset", presetName, sizeof(presetName) );
+        ImGui::SameLine();
+        ImGui::BeginDisabled( presetName[0] == '\0' );
+        if( ImGui::SmallButton( "Save current as preset" ) )
+        {
+            selectedPreset = (int)m_tc.SavePreset( presetName );
+            presetName[0] = '\0';
+        }
+        ImGui::EndDisabled();
+    }
+
+    ImGui::Separator();
+
     const auto mode = m_tc.GetSortMode();
     ImGui::TextUnformatted( "Sort:" );
     ImGui::SameLine();

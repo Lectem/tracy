@@ -232,9 +232,15 @@ void TimelineController::MoveItem( const void* srcKey, const void* targetKey )
     if( srcKey == targetKey ) return;
     if( m_itemMap.find( srcKey ) == m_itemMap.end() ) return;
 
-    if( m_userOrder.empty() )
+    unordered_flat_set<const void*> inOrder( m_userOrder.begin(), m_userOrder.end() );
+    for( const auto* it : m_items )
     {
-        for( const auto* it : m_items ) m_userOrder.push_back( it->GetKey() );
+        const void* k = it->GetKey();
+        if( !inOrder.count( k ) )
+        {
+            m_userOrder.push_back( k );
+            inOrder.insert( k );
+        }
     }
 
     auto srcPos = std::find( m_userOrder.begin(), m_userOrder.end(), srcKey );
@@ -253,6 +259,51 @@ void TimelineController::MoveItem( const void* srcKey, const void* targetKey )
 
     m_sortMode = SortMode::Manual;
     m_orderDirty = true;
+}
+
+size_t TimelineController::SavePreset( const char* name )
+{
+    LaneConfigPreset p;
+    p.name = name;
+    p.sortMode = m_sortMode;
+    p.groupByType = m_groupByType;
+    p.orderedItems.reserve( m_items.size() );
+    for( const auto* it : m_items )
+    {
+        p.orderedItems.push_back( { it->GetKey(), it->IsVisible(), it->IsPinned() } );
+    }
+    for( size_t i = 0; i < m_presets.size(); ++i )
+    {
+        if( m_presets[i].name == p.name ) { m_presets[i] = std::move( p ); return i; }
+    }
+    m_presets.push_back( std::move( p ) );
+    return m_presets.size() - 1;
+}
+
+void TimelineController::ApplyPreset( size_t idx )
+{
+    if( idx >= m_presets.size() ) return;
+    const auto& p = m_presets[idx];
+
+    m_sortMode = p.sortMode;
+    m_groupByType = p.groupByType;
+    m_userOrder.clear();
+
+    for( const auto& s : p.orderedItems )
+    {
+        auto it = m_itemMap.find( s.key );
+        if( it == m_itemMap.end() ) continue;
+        it->second->SetVisible( s.visible );
+        it->second->SetPinned( s.pinned );
+        if( p.sortMode == SortMode::Manual ) m_userOrder.push_back( s.key );
+    }
+    m_orderDirty = true;
+}
+
+void TimelineController::DeletePreset( size_t idx )
+{
+    if( idx >= m_presets.size() ) return;
+    m_presets.erase( m_presets.begin() + idx );
 }
 
 void TimelineController::End( double pxns, const ImVec2& wpos, bool hover, bool vcenter, float yMin, float yMax )

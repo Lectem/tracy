@@ -3,6 +3,7 @@
 
 #include <assert.h>
 #include <optional>
+#include <string>
 #include <vector>
 
 #include "TracyImGui.hpp"
@@ -56,6 +57,19 @@ public:
     void MoveItem( const void* srcKey, const void* targetKey );
     void MarkDirty() { m_orderDirty = true; }
 
+    struct LaneConfigPreset
+    {
+        std::string name;
+        SortMode sortMode;
+        bool groupByType;
+        struct ItemState { const void* key; bool visible; bool pinned; };
+        std::vector<ItemState> orderedItems;
+    };
+    const std::vector<LaneConfigPreset>& GetPresets() const { return m_presets; }
+    size_t SavePreset( const char* name );
+    void ApplyPreset( size_t idx );
+    void DeletePreset( size_t idx );
+
     SortMode GetSortMode() const { return m_sortMode; }
     void SetSortMode( SortMode mode );
 
@@ -77,6 +91,7 @@ private:
     bool m_groupByType;
     bool m_orderDirty;
     size_t m_lastItemCount;
+    std::vector<LaneConfigPreset> m_presets;
 
     float m_height;
     float m_scroll;
