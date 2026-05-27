@@ -158,6 +158,9 @@ public:
     ShortenName GetShortenName() const { return m_vd.shortenName; }
     int GetNextGpuIdx() { return m_gpuIdx++; }
 
+    Vector<const ThreadData*>& GetThreadOrderMutable() { return m_threadOrder; }
+    TimelineController& GetTimelineController() { return m_tc; }
+
     const MessageData* GetMessageHighlight() const { return m_msgHighlight; }
     uint32_t GetLockInfoWindow() const { return m_lockInfoWindow; }
 
@@ -457,7 +460,6 @@ private:
     unordered_flat_map<const PlotData*, PlotView> m_plotView;
     Vector<const ThreadData*> m_threadOrder;
     Vector<const ThreadData*> m_threadReinsert;
-    Vector<float> m_threadDnd;
 
     tracy_force_inline bool& VisibleMsgThread( uint64_t thread )
     {

@@ -5,6 +5,7 @@
 #include "TracyImGui.hpp"
 #include "TracyMouse.hpp"
 #include "TracyPrint.hpp"
+#include "TracyTimelineItem.hpp"
 #include "TracyTimelineItemGpu.hpp"
 #include "TracyUtility.hpp"
 #include "TracyView.hpp"
@@ -663,143 +664,98 @@ void View::DrawOptions()
     }
 
     ImGui::Separator();
-    auto expand = ImGui::TreeNode( ICON_FA_SHUFFLE " Visible threads:" );
-    ImGui::SameLine();
-    size_t visibleThreads = 0;
-    for( const auto& t : m_threadOrder ) if( m_tc.GetItem( t ).IsVisible() ) visibleThreads++;
-    if( visibleThreads == m_threadOrder.size() )
     {
-        ImGui::TextDisabled( "(%zu)", m_threadOrder.size() );
-    }
-    else
-    {
-        ImGui::TextDisabled( "(%zu/%zu)", visibleThreads, m_threadOrder.size() );
-    }
-    if( expand )
-    {
-        auto& crash = m_worker.GetCrashEvent();
-
+        const auto& ordered = m_tc.GetCurrentOrder();
+        size_t total = ordered.size();
+        size_t visible = 0;
+        for( const auto* item : ordered ) if( item->IsVisible() ) visible++;
+        auto expand = ImGui::TreeNode( ICON_FA_SHUFFLE " Timeline lanes:" );
         ImGui::SameLine();
-        if( ImGui::SmallButton( "Select all" ) )
+        if( visible == total ) ImGui::TextDisabled( "(%zu)", total );
+        else ImGui::TextDisabled( "(%zu/%zu)", visible, total );
+        if( expand )
         {
-            for( const auto& t : m_threadOrder )
-            {
-                m_tc.GetItem( t ).SetVisible( true );
-            }
-        }
-        ImGui::SameLine();
-        if( ImGui::SmallButton( "Unselect all" ) )
-        {
-            for( const auto& t : m_threadOrder )
-            {
-                m_tc.GetItem( t ).SetVisible( false );
-            }
-        }
-        ImGui::SameLine();
-        if( ImGui::SmallButton( "Sort" ) )
-        {
-            pdqsort_branchless( m_threadOrder.begin(), m_threadOrder.end(), [this] ( const auto& lhs, const auto& rhs ) {
-                if( lhs->groupHint != rhs->groupHint ) return lhs->groupHint < rhs->groupHint;
-                const auto cmp = strcmp( m_worker.GetThreadName( lhs->id ), m_worker.GetThreadName( rhs->id ) );
-                if( cmp != 0 ) return cmp < 0;
-                return lhs->id < rhs->id;
-            } );
-        }
-
-        const auto wposx = ImGui::GetCursorScreenPos().x;
-        m_threadDnd.clear();
-        int idx = 0;
-        for( const auto& t : m_threadOrder )
-        {
-            m_threadDnd.push_back( ImGui::GetCursorScreenPos().y );
-            ImGui::PushID( idx );
-            const auto threadName = m_worker.GetThreadName( t->id );
-            const auto threadColor = GetThreadColor( t->id, 0 );
-            SmallColorBox( threadColor );
             ImGui::SameLine();
-            m_tc.GetItem( t ).VisibilityCheckbox();
-            if( ImGui::BeginDragDropSource( ImGuiDragDropFlags_SourceNoHoldToOpenOthers ) )
+            if( ImGui::SmallButton( "Show all" ) )
             {
-                ImGui::SetDragDropPayload( "ThreadOrder", &idx, sizeof(int) );
-                ImGui::TextUnformatted( ICON_FA_SHUFFLE );
-                ImGui::SameLine();
-                SmallColorBox( threadColor );
-                ImGui::SameLine();
-                ImGui::TextUnformatted( threadName );
-                ImGui::EndDragDropSource();
+                for( const auto& kv : m_tc.GetItemMap() ) kv.second->SetVisible( true );
             }
-            ImGui::PopID();
             ImGui::SameLine();
-            ImGui::TextDisabled( "(%s)", RealToString( t->id ) );
-            if( crash.thread == t->id )
+            if( ImGui::SmallButton( "Hide all" ) )
             {
-                ImGui::SameLine();
-                TextColoredUnformatted( ImVec4( 1.f, 0.2f, 0.2f, 1.f ), ICON_FA_SKULL );
-                if( ImGui::IsItemHovered() )
+                for( const auto& kv : m_tc.GetItemMap() ) kv.second->SetVisible( false );
+            }
+
+            const void* dropSrc = nullptr;
+            const void* dropTarget = nullptr;
+            int idx = 0;
+            for( const auto* item : ordered )
+            {
+                ImGui::PushID( idx );
+                const auto gapY = ImGui::GetCursorScreenPos().y;
+                ImGui::InvisibleButton( "##gap", ImVec2( ImGui::GetContentRegionAvail().x, 4 ) );
+                if( ImGui::BeginDragDropTarget() )
                 {
-                    ImGui::BeginTooltip();
-                    ImGui::TextUnformatted( "Crashed" );
-                    ImGui::EndTooltip();
-                    if( IsMouseClicked( 0 ) )
+                    if( auto payload = ImGui::AcceptDragDropPayload( "TimelineItemOrder", ImGuiDragDropFlags_AcceptNoDrawDefaultRect ) )
                     {
-                        m_showInfo = true;
+                        dropSrc = *(const void**)payload->Data;
+                        dropTarget = item->GetKey();
                     }
-                    if( IsMouseClicked( 2 ) )
-                    {
-                        CenterAtTime( crash.time );
-                    }
-                }
-            }
-            if( t->isFiber )
-            {
-                ImGui::SameLine();
-                TextColoredUnformatted( ImVec4( 0.2f, 0.6f, 0.2f, 1.f ), "Fiber" );
-            }
-            ImGui::SameLine();
-            ImGui::TextDisabled( "%s top level zones", RealToString( t->timeline.size() ) );
-            idx++;
-        }
-        if( m_threadDnd.size() > 1 )
-        {
-            const auto w = ImGui::GetContentRegionAvail().x;
-            const auto dist = m_threadDnd[1] - m_threadDnd[0];
-            const auto half = dist * 0.5f;
-            m_threadDnd.push_back( m_threadDnd.back() + dist );
-
-            int target = -1;
-            int source;
-            for( size_t i=0; i<m_threadDnd.size(); i++ )
-            {
-                if( ImGui::BeginDragDropTargetCustom( ImRect( wposx, m_threadDnd[i] - half, wposx + w, m_threadDnd[i] + half ), i+1 ) )
-                {
-                    auto draw = ImGui::GetWindowDrawList();
-                    draw->AddLine( ImVec2( wposx, m_threadDnd[i] ), ImVec2( wposx + w, m_threadDnd[i] ), ImGui::GetColorU32(ImGuiCol_DragDropTarget), 2.f );
-                    if( auto payload = ImGui::AcceptDragDropPayload( "ThreadOrder", ImGuiDragDropFlags_AcceptNoDrawDefaultRect ) )
-                    {
-                        target = (int)i;
-                        source = *(int*)payload->Data;
-                    }
+                    const auto wposx = ImGui::GetCursorScreenPos().x;
+                    ImGui::GetWindowDrawList()->AddLine(
+                        ImVec2( wposx, gapY + 2 ),
+                        ImVec2( wposx + ImGui::GetContentRegionAvail().x, gapY + 2 ),
+                        ImGui::GetColorU32( ImGuiCol_DragDropTarget ), 2.f );
                     ImGui::EndDragDropTarget();
                 }
+
+                uint32_t typeColor = 0;
+                switch( item->GetType() )
+                {
+                case TimelineItemGroup::Gpu:    typeColor = 0xFFFFAAAA; break;
+                case TimelineItemGroup::Cpu:    typeColor = 0xFFDD88DD; break;
+                case TimelineItemGroup::Thread: typeColor = 0xFFFFFFFF; break;
+                case TimelineItemGroup::Plot:   typeColor = 0xFF44DDDD; break;
+                }
+                SmallColorBox( typeColor );
+                ImGui::SameLine();
+                m_tc.GetItem( item->GetKey() ).VisibilityCheckbox();
+                if( ImGui::BeginDragDropSource( ImGuiDragDropFlags_SourceNoHoldToOpenOthers ) )
+                {
+                    const void* key = item->GetKey();
+                    ImGui::SetDragDropPayload( "TimelineItemOrder", &key, sizeof(key) );
+                    SmallColorBox( typeColor );
+                    ImGui::SameLine();
+                    ImGui::TextUnformatted( item->HeaderLabel() );
+                    ImGui::EndDragDropSource();
+                }
+                ImGui::PopID();
+                idx++;
             }
-            if( target >= 0 && target != source )
+            // Trailing drop strip.
             {
-                const auto srcval = m_threadOrder[source];
-                if( target < source )
+                const auto gapY = ImGui::GetCursorScreenPos().y;
+                ImGui::PushID( idx );
+                ImGui::InvisibleButton( "##gapEnd", ImVec2( ImGui::GetContentRegionAvail().x, 4 ) );
+                if( ImGui::BeginDragDropTarget() )
                 {
-                    assert( source < (int)m_threadOrder.size() );
-                    m_threadOrder.erase( m_threadOrder.begin() + source );
-                    m_threadOrder.insert( m_threadOrder.begin() + target, srcval );
+                    if( auto payload = ImGui::AcceptDragDropPayload( "TimelineItemOrder", ImGuiDragDropFlags_AcceptNoDrawDefaultRect ) )
+                    {
+                        dropSrc = *(const void**)payload->Data;
+                        dropTarget = nullptr;
+                    }
+                    const auto wposx = ImGui::GetCursorScreenPos().x;
+                    ImGui::GetWindowDrawList()->AddLine(
+                        ImVec2( wposx, gapY + 2 ),
+                        ImVec2( wposx + ImGui::GetContentRegionAvail().x, gapY + 2 ),
+                        ImGui::GetColorU32( ImGuiCol_DragDropTarget ), 2.f );
+                    ImGui::EndDragDropTarget();
                 }
-                else
-                {
-                    assert( target <= (int)m_threadOrder.size() );
-                    m_threadOrder.insert( m_threadOrder.begin() + target, srcval );
-                    m_threadOrder.erase( m_threadOrder.begin() + source );
-                }
+                ImGui::PopID();
             }
+            if( dropSrc ) m_tc.MoveItem( dropSrc, dropTarget );
+            ImGui::TreePop();
         }
-        ImGui::TreePop();
     }
 
     if( m_worker.AreFramesUsed() )

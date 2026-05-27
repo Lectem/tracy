@@ -37,6 +37,7 @@ public:
 
     float GetHeight() const { return m_height; }
     const unordered_flat_map<const void*, std::unique_ptr<TimelineItem>>& GetItemMap() const { return m_itemMap; }
+    const std::vector<TimelineItem*>& GetCurrentOrder() const { return m_items; }
 
     tracy_force_inline TimelineItem& GetItem( const void* data )
     {
@@ -45,12 +46,16 @@ public:
         return *it->second;
     }
 
+    void MoveItem( const void* srcKey, const void* targetKey );
+
 private:
     void UpdateCenterItem();
     std::optional<int> CalculateScrollPosition() const;
+    void ApplyOrder();
 
     std::vector<TimelineItem*> m_items;
     unordered_flat_map<const void*, std::unique_ptr<TimelineItem>> m_itemMap;
+    std::vector<const void*> m_userOrder;
 
     float m_height;
     float m_scroll;

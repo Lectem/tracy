@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cstring>
 #include <thread>
 
 #include "TracyTimelineItem.hpp"
@@ -99,6 +100,66 @@ std::optional<int> TimelineController::CalculateScrollPosition() const
     return std::nullopt;
 }
 
+void TimelineController::ApplyOrder()
+{
+    if( m_userOrder.empty() || m_items.empty() ) return;
+
+    unordered_flat_map<const void*, size_t> orderIndex;
+    orderIndex.reserve( m_userOrder.size() + m_items.size() );
+    for( size_t i = 0; i < m_userOrder.size(); ++i )
+    {
+        orderIndex.emplace( m_userOrder[i], i );
+    }
+    size_t nextIdx = m_userOrder.size();
+    for( const auto* item : m_items )
+    {
+        if( orderIndex.find( item->GetKey() ) == orderIndex.end() )
+        {
+            orderIndex.emplace( item->GetKey(), nextIdx++ );
+        }
+    }
+
+    std::stable_sort( m_items.begin(), m_items.end(),
+        [&orderIndex]( const TimelineItem* a, const TimelineItem* b ) {
+            return orderIndex[a->GetKey()] < orderIndex[b->GetKey()];
+        } );
+
+    auto& threadOrder = m_view.GetThreadOrderMutable();
+    threadOrder.clear();
+    for( const auto* item : m_items )
+    {
+        if( item->GetType() == TimelineItemGroup::Thread )
+        {
+            threadOrder.push_back( static_cast<const ThreadData*>( item->GetKey() ) );
+        }
+    }
+}
+
+void TimelineController::MoveItem( const void* srcKey, const void* targetKey )
+{
+    if( srcKey == targetKey ) return;
+    if( m_itemMap.find( srcKey ) == m_itemMap.end() ) return;
+
+    if( m_userOrder.empty() )
+    {
+        for( const auto* it : m_items ) m_userOrder.push_back( it->GetKey() );
+    }
+
+    auto srcPos = std::find( m_userOrder.begin(), m_userOrder.end(), srcKey );
+    if( srcPos == m_userOrder.end() ) return;
+    m_userOrder.erase( srcPos );
+
+    if( targetKey )
+    {
+        auto tgtPos = std::find( m_userOrder.begin(), m_userOrder.end(), targetKey );
+        m_userOrder.insert( tgtPos, srcKey );
+    }
+    else
+    {
+        m_userOrder.push_back( srcKey );
+    }
+}
+
 void TimelineController::End( double pxns, const ImVec2& wpos, bool hover, bool vcenter, float yMin, float yMax )
 {
     auto shouldUpdateCenterItem = [&] () {
@@ -109,6 +170,8 @@ void TimelineController::End( double pxns, const ImVec2& wpos, bool hover, bool 
         const auto mouseVisible = ImGui::IsMousePosValid( &mousePos );
         return ( ( imguiChangedScroll || mouseMoved || !mouseVisible ) && !ImGui::IsMouseDown( 1 ) ) || !m_centerItemkey;
     };
+
+    ApplyOrder();
 
     if( !vcenter )
     {
