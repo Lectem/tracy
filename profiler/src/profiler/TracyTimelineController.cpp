@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <thread>
 
@@ -215,12 +216,68 @@ void TimelineController::End( double pxns, const ImVec2& wpos, bool hover, bool 
     m_td.Sync();
 
     yOffset = 0;
-    for( auto& item : m_items )
+    const void* dropSrc = nullptr;
+    const void* dropTarget = nullptr;
+    const auto* activePayload = ImGui::GetDragDropPayload();
+    const bool dndActive = activePayload && activePayload->IsDataType( "TimelineItemOrder" );
+
+    float bestDropY = wpos.y;
+    const void* bestDropTarget = m_items.empty() ? nullptr : m_items.front()->GetKey();
+    float bestDropDist = std::numeric_limits<float>::max();
+
+    if( dndActive && !m_firstFrame && !m_items.empty() )
     {
+        const float mouseY = ImGui::GetMousePos().y;
+        const float d = std::abs( wpos.y - mouseY );
+        bestDropY = wpos.y;
+        bestDropTarget = m_items.front()->GetKey();
+        bestDropDist = d;
+    }
+
+    for( size_t i = 0; i < m_items.size(); ++i )
+    {
+        auto& item = m_items[i];
         auto currentFrameItemHeight = item->GetHeight();
         item->Draw( m_firstFrame, ctx, yOffset );
         if( m_firstFrame ) currentFrameItemHeight = item->GetHeight();
         yOffset += currentFrameItemHeight;
+
+        if( dndActive && !m_firstFrame )
+        {
+            const float gapY = wpos.y + yOffset;
+            const float mouseY = ImGui::GetMousePos().y;
+            const float d = std::abs( gapY - mouseY );
+            if( d < bestDropDist )
+            {
+                bestDropDist = d;
+                bestDropY = gapY;
+                bestDropTarget = ( i + 1 < m_items.size() ) ? m_items[i + 1]->GetKey() : nullptr;
+            }
+        }
+    }
+
+    if( dndActive && !m_firstFrame && !m_items.empty() )
+    {
+        ImGui::SetCursorScreenPos( wpos );
+        ImGui::InvisibleButton( "##timelineDropZone", ImVec2( ctx.w, std::max( 1.f, (float)yOffset ) ) );
+        if( ImGui::BeginDragDropTarget() )
+        {
+            if( auto payload = ImGui::AcceptDragDropPayload( "TimelineItemOrder", ImGuiDragDropFlags_AcceptNoDrawDefaultRect ) )
+            {
+                dropSrc = *(const void**)payload->Data;
+                dropTarget = bestDropTarget;
+            }
+            ImGui::GetWindowDrawList()->AddLine(
+                ImVec2( wpos.x, bestDropY ),
+                ImVec2( wpos.x + ctx.w, bestDropY ),
+                ImGui::GetColorU32( ImGuiCol_DragDropTarget ), 2.f );
+            ImGui::EndDragDropTarget();
+        }
+    }
+
+    if( dropSrc )
+    {
+        MoveItem( dropSrc, dropTarget );
     }
 
     if( const auto scrollY = CalculateScrollPosition() )
