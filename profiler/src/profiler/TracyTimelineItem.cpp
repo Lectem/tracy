@@ -90,14 +90,29 @@ void TimelineItem::Draw( bool firstFrame, const TimelineContext& ctx, int yOffse
             HeaderExtraContents( ctx, hdrOffset, labelWidth );
         }
 
-        if( ctx.hover && ImGui::IsMouseHoveringRect( wpos + ImVec2( 0, hdrOffset ), wpos + ImVec2( ty + labelWidth, hdrOffset + ty ) ) )
+        const auto labelRectMin = wpos + ImVec2( 0, hdrOffset );
+        const auto labelRectSize = ImVec2( ty + labelWidth, ty );
+        ImGui::SetCursorScreenPos( labelRectMin );
+        const bool leftClicked = ImGui::InvisibleButton( "##hdrLabel", labelRectSize );
+
+        if( ImGui::BeginDragDropSource( ImGuiDragDropFlags_SourceNoHoldToOpenOthers ) )
+        {
+            const void* key = GetKey();
+            ImGui::SetDragDropPayload( "TimelineItemOrder", &key, sizeof(key) );
+            SmallColorBox( HeaderColor() );
+            ImGui::SameLine();
+            ImGui::TextUnformatted( label );
+            ImGui::EndDragDropSource();
+        }
+
+        if( leftClicked )
+        {
+            m_showFull = !m_showFull;
+        }
+        if( ImGui::IsItemHovered() )
         {
             HeaderTooltip( label );
 
-            if( IsMouseClicked( 0 ) )
-            {
-                m_showFull = !m_showFull;
-            }
             if( IsMouseClicked( 2 ) )
             {
                 const auto t0 = RangeBegin();
