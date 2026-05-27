@@ -20,6 +20,13 @@ class Worker;
 class TimelineController
 {
 public:
+    enum class SortMode
+    {
+        Manual,
+        Name,
+        ActiveTime,
+    };
+
     TimelineController( View& view, Worker& worker, bool threading );
     ~TimelineController();
 
@@ -48,14 +55,27 @@ public:
 
     void MoveItem( const void* srcKey, const void* targetKey );
 
+    SortMode GetSortMode() const { return m_sortMode; }
+    void SetSortMode( SortMode mode );
+
+    bool GetGroupByType() const { return m_groupByType; }
+    void SetGroupByType( bool v );
+
 private:
     void UpdateCenterItem();
     std::optional<int> CalculateScrollPosition() const;
     void ApplyOrder();
+    int64_t ComputeActiveTime( const TimelineItem* item ) const;
+    void SyncThreadOrder();
 
     std::vector<TimelineItem*> m_items;
     unordered_flat_map<const void*, std::unique_ptr<TimelineItem>> m_itemMap;
     std::vector<const void*> m_userOrder;
+
+    SortMode m_sortMode;
+    bool m_groupByType;
+    bool m_orderDirty;
+    size_t m_lastItemCount;
 
     float m_height;
     float m_scroll;

@@ -14,7 +14,11 @@ namespace tracy
 {
 
 TimelineController::TimelineController( View& view, Worker& worker, bool threading )
-    : m_height( 0 )
+    : m_sortMode( SortMode::Manual )
+    , m_groupByType( false )
+    , m_orderDirty( false )
+    , m_lastItemCount( 0 )
+    , m_height( 0 )
     , m_scroll( 0 )
     , m_centerItemkey( nullptr )
     , m_centerItemOffsetY( 0 )
@@ -101,30 +105,50 @@ std::optional<int> TimelineController::CalculateScrollPosition() const
     return std::nullopt;
 }
 
-void TimelineController::ApplyOrder()
+void TimelineController::SetSortMode( SortMode mode )
 {
-    if( m_userOrder.empty() || m_items.empty() ) return;
+    if( m_sortMode == mode ) return;
+    m_sortMode = mode;
+    m_orderDirty = true;
+}
 
-    unordered_flat_map<const void*, size_t> orderIndex;
-    orderIndex.reserve( m_userOrder.size() + m_items.size() );
-    for( size_t i = 0; i < m_userOrder.size(); ++i )
+void TimelineController::SetGroupByType( bool v )
+{
+    if( m_groupByType == v ) return;
+    m_groupByType = v;
+    m_orderDirty = true;
+}
+
+int64_t TimelineController::ComputeActiveTime( const TimelineItem* item ) const
+{
+    switch( item->GetType() )
     {
-        orderIndex.emplace( m_userOrder[i], i );
-    }
-    size_t nextIdx = m_userOrder.size();
-    for( const auto* item : m_items )
+    case TimelineItemGroup::Thread:
     {
-        if( orderIndex.find( item->GetKey() ) == orderIndex.end() )
-        {
-            orderIndex.emplace( item->GetKey(), nextIdx++ );
-        }
+        const auto* td = static_cast<const ThreadData*>( item->GetKey() );
+        const auto ctx = m_worker.GetContextSwitchData( td->id );
+        if( ctx ) return ctx->runningTime;
+        return 0;
     }
+    case TimelineItemGroup::Gpu:
+    {
+        const auto* gd = static_cast<const GpuCtxData*>( item->GetKey() );
+        return (int64_t)gd->count;
+    }
+    case TimelineItemGroup::Cpu:
+        return 0;
+    case TimelineItemGroup::Plot:
+    {
+        const auto* pd = static_cast<const PlotData*>( item->GetKey() );
+        return (int64_t)pd->data.size();
+    }
+    default:
+        return 0;
+    }
+}
 
-    std::stable_sort( m_items.begin(), m_items.end(),
-        [&orderIndex]( const TimelineItem* a, const TimelineItem* b ) {
-            return orderIndex[a->GetKey()] < orderIndex[b->GetKey()];
-        } );
-
+void TimelineController::SyncThreadOrder()
+{
     auto& threadOrder = m_view.GetThreadOrderMutable();
     threadOrder.clear();
     for( const auto* item : m_items )
@@ -134,6 +158,68 @@ void TimelineController::ApplyOrder()
             threadOrder.push_back( static_cast<const ThreadData*>( item->GetKey() ) );
         }
     }
+}
+
+void TimelineController::ApplyOrder()
+{
+    if( m_items.empty() ) return;
+
+    if( m_items.size() != m_lastItemCount )
+    {
+        m_lastItemCount = m_items.size();
+        m_orderDirty = true;
+    }
+
+    if( !m_orderDirty ) return;
+    m_orderDirty = false;
+
+    if( m_sortMode == SortMode::Name )
+    {
+        std::stable_sort( m_items.begin(), m_items.end(),
+            []( const TimelineItem* a, const TimelineItem* b ) {
+                return strcmp( a->HeaderLabel(), b->HeaderLabel() ) < 0;
+            } );
+    }
+    else if( m_sortMode == SortMode::ActiveTime )
+    {
+        std::stable_sort( m_items.begin(), m_items.end(),
+            [this]( const TimelineItem* a, const TimelineItem* b ) {
+                return ComputeActiveTime( a ) > ComputeActiveTime( b );
+            } );
+    }
+    else if( m_sortMode == SortMode::Manual && !m_userOrder.empty() )
+    {
+        unordered_flat_map<const void*, size_t> orderIndex;
+        orderIndex.reserve( m_userOrder.size() + m_items.size() );
+        for( size_t i = 0; i < m_userOrder.size(); ++i )
+        {
+            orderIndex.emplace( m_userOrder[i], i );
+        }
+        size_t nextIdx = m_userOrder.size();
+        for( const auto* item : m_items )
+        {
+            if( orderIndex.find( item->GetKey() ) == orderIndex.end() )
+            {
+                orderIndex.emplace( item->GetKey(), nextIdx++ );
+            }
+        }
+
+        const auto& constOrderIndex = orderIndex;
+        std::stable_sort( m_items.begin(), m_items.end(),
+            [&constOrderIndex]( const TimelineItem* a, const TimelineItem* b ) {
+                return constOrderIndex.find( a->GetKey() )->second < constOrderIndex.find( b->GetKey() )->second;
+            } );
+    }
+
+    if( m_groupByType )
+    {
+        std::stable_sort( m_items.begin(), m_items.end(),
+            []( const TimelineItem* a, const TimelineItem* b ) {
+                return (int)a->GetType() < (int)b->GetType();
+            } );
+    }
+
+    SyncThreadOrder();
 }
 
 void TimelineController::MoveItem( const void* srcKey, const void* targetKey )
@@ -159,6 +245,9 @@ void TimelineController::MoveItem( const void* srcKey, const void* targetKey )
     {
         m_userOrder.push_back( srcKey );
     }
+
+    m_sortMode = SortMode::Manual;
+    m_orderDirty = true;
 }
 
 void TimelineController::End( double pxns, const ImVec2& wpos, bool hover, bool vcenter, float yMin, float yMax )
