@@ -86,14 +86,21 @@ void TimelineItem::Draw( bool firstFrame, const TimelineContext& ctx, int yOffse
         const auto label = HeaderLabel();
         labelWidth = ImGui::CalcTextSize( label ).x;
         DrawTextContrast( draw, wpos + ImVec2( ty, hdrOffset ), m_showFull ? color : colorInactive, label );
+        float extraWidth = 0;
+        if( m_pinned )
+        {
+            const auto pinWidth = ImGui::CalcTextSize( ICON_FA_THUMBTACK ).x;
+            DrawTextContrast( draw, wpos + ImVec2( ty + labelWidth + 4, hdrOffset ), 0x88FFFFFF, ICON_FA_THUMBTACK );
+            extraWidth = 4 + pinWidth;
+        }
         if( m_showFull )
         {
             DrawLine( draw, dpos + ImVec2( 0, hdrOffset + ty - 1 ), dpos + ImVec2( w, hdrOffset + ty - 1 ), HeaderLineColor() );
-            HeaderExtraContents( ctx, hdrOffset, labelWidth );
+            HeaderExtraContents( ctx, hdrOffset, labelWidth + extraWidth );
         }
 
         const auto labelRectMin = wpos + ImVec2( 0, hdrOffset );
-        const auto labelRectSize = ImVec2( ty + labelWidth, ty );
+        const auto labelRectSize = ImVec2( ty + labelWidth + extraWidth, ty );
         ImGui::SetCursorScreenPos( labelRectMin );
         const bool leftClicked = ImGui::InvisibleButton( "##hdrLabel", labelRectSize );
 
