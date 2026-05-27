@@ -1187,6 +1187,7 @@ bool View::DrawImpl()
     DrawInfoWindow();
 
     if( m_showOptions ) DrawOptions();
+    if( m_showLaneConfig ) DrawLaneConfig();
     if( m_showMessages ) DrawMessages();
     if( m_showFlameGraph ) DrawFlameGraph();
     if( m_findZone.show ) DrawFindZone();

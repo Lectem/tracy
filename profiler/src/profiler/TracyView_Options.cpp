@@ -665,103 +665,22 @@ void View::DrawOptions()
 
     ImGui::Separator();
     {
-        const auto& ordered = m_tc.GetCurrentOrder();
-        size_t total = ordered.size();
+        const auto& itemMap = m_tc.GetItemMap();
+        size_t total = itemMap.size();
         size_t visible = 0;
-        for( const auto* item : ordered ) if( item->IsVisible() ) visible++;
-        auto expand = ImGui::TreeNode( ICON_FA_SHUFFLE " Timeline lanes:" );
+        for( const auto& kv : itemMap ) if( kv.second->IsVisible() ) visible++;
+        ImGui::TextDisabled( ICON_FA_SHUFFLE " Timeline lanes:" );
         ImGui::SameLine();
         if( visible == total ) ImGui::TextDisabled( "(%zu)", total );
         else ImGui::TextDisabled( "(%zu/%zu)", visible, total );
-        if( expand )
-        {
-            ImGui::SameLine();
-            if( ImGui::SmallButton( "Show all" ) )
-            {
-                for( const auto& kv : m_tc.GetItemMap() ) kv.second->SetVisible( true );
-            }
-            ImGui::SameLine();
-            if( ImGui::SmallButton( "Hide all" ) )
-            {
-                for( const auto& kv : m_tc.GetItemMap() ) kv.second->SetVisible( false );
-            }
-
-            const void* dropSrc = nullptr;
-            const void* dropTarget = nullptr;
-            int idx = 0;
-            for( const auto* item : ordered )
-            {
-                ImGui::PushID( idx );
-                const auto gapY = ImGui::GetCursorScreenPos().y;
-                ImGui::InvisibleButton( "##gap", ImVec2( ImGui::GetContentRegionAvail().x, 4 ) );
-                if( ImGui::BeginDragDropTarget() )
-                {
-                    if( auto payload = ImGui::AcceptDragDropPayload( "TimelineItemOrder", ImGuiDragDropFlags_AcceptNoDrawDefaultRect ) )
-                    {
-                        dropSrc = *(const void**)payload->Data;
-                        dropTarget = item->GetKey();
-                    }
-                    const auto wposx = ImGui::GetCursorScreenPos().x;
-                    ImGui::GetWindowDrawList()->AddLine(
-                        ImVec2( wposx, gapY + 2 ),
-                        ImVec2( wposx + ImGui::GetContentRegionAvail().x, gapY + 2 ),
-                        ImGui::GetColorU32( ImGuiCol_DragDropTarget ), 2.f );
-                    ImGui::EndDragDropTarget();
-                }
-
-                uint32_t typeColor = 0;
-                switch( item->GetType() )
-                {
-                case TimelineItemGroup::Gpu:    typeColor = 0xFFFFAAAA; break;
-                case TimelineItemGroup::Cpu:    typeColor = 0xFFDD88DD; break;
-                case TimelineItemGroup::Thread: typeColor = 0xFFFFFFFF; break;
-                case TimelineItemGroup::Plot:   typeColor = 0xFF44DDDD; break;
-                }
-                SmallColorBox( typeColor );
-                ImGui::SameLine();
-                m_tc.GetItem( item->GetKey() ).VisibilityCheckbox();
-                if( ImGui::BeginDragDropSource( ImGuiDragDropFlags_SourceNoHoldToOpenOthers ) )
-                {
-                    const void* key = item->GetKey();
-                    ImGui::SetDragDropPayload( "TimelineItemOrder", &key, sizeof(key) );
-                    SmallColorBox( typeColor );
-                    ImGui::SameLine();
-                    ImGui::TextUnformatted( item->HeaderLabel() );
-                    ImGui::EndDragDropSource();
-                }
-                ImGui::PopID();
-                idx++;
-            }
-            // Trailing drop strip.
-            {
-                const auto gapY = ImGui::GetCursorScreenPos().y;
-                ImGui::PushID( idx );
-                ImGui::InvisibleButton( "##gapEnd", ImVec2( ImGui::GetContentRegionAvail().x, 4 ) );
-                if( ImGui::BeginDragDropTarget() )
-                {
-                    if( auto payload = ImGui::AcceptDragDropPayload( "TimelineItemOrder", ImGuiDragDropFlags_AcceptNoDrawDefaultRect ) )
-                    {
-                        dropSrc = *(const void**)payload->Data;
-                        dropTarget = nullptr;
-                    }
-                    const auto wposx = ImGui::GetCursorScreenPos().x;
-                    ImGui::GetWindowDrawList()->AddLine(
-                        ImVec2( wposx, gapY + 2 ),
-                        ImVec2( wposx + ImGui::GetContentRegionAvail().x, gapY + 2 ),
-                        ImGui::GetColorU32( ImGuiCol_DragDropTarget ), 2.f );
-                    ImGui::EndDragDropTarget();
-                }
-                ImGui::PopID();
-            }
-            if( dropSrc ) m_tc.MoveItem( dropSrc, dropTarget );
-            ImGui::TreePop();
-        }
+        ImGui::SameLine();
+        if( ImGui::SmallButton( "Configure lanes..." ) ) m_showLaneConfig = true;
     }
 
     if( m_worker.AreFramesUsed() )
     {
         ImGui::Separator();
-        expand = ImGui::TreeNode( ICON_FA_IMAGES " Visible frame sets:" );
+        auto expand = ImGui::TreeNode( ICON_FA_IMAGES " Visible frame sets:" );
         ImGui::SameLine();
         uint64_t visibleFrames = 0;
         for( const auto& fd : m_worker.GetFrames() ) if( Vis( fd ) ) visibleFrames++;
@@ -850,6 +769,128 @@ void View::DrawOptions()
     }
 
     default_markers_active = highlight;
+
+    ImGui::End();
+}
+
+void View::DrawLaneConfig()
+{
+    ImGui::SetNextWindowSize( ImVec2( 520 * GetScale(), 600 * GetScale() ), ImGuiCond_FirstUseEver );
+    ImGui::Begin( ICON_FA_SHUFFLE " Timeline lanes", &m_showLaneConfig );
+    if( ImGui::GetCurrentWindowRead()->SkipItems ) { ImGui::End(); return; }
+
+    const auto mode = m_tc.GetSortMode();
+    ImGui::TextUnformatted( "Sort:" );
+    ImGui::SameLine();
+    if( ImGui::RadioButton( "Manual", mode == TimelineController::SortMode::Manual ) ) m_tc.SetSortMode( TimelineController::SortMode::Manual );
+    ImGui::SameLine();
+    if( ImGui::RadioButton( "Name", mode == TimelineController::SortMode::Name ) ) m_tc.SetSortMode( TimelineController::SortMode::Name );
+    ImGui::SameLine();
+    if( ImGui::RadioButton( "Active time", mode == TimelineController::SortMode::ActiveTime ) ) m_tc.SetSortMode( TimelineController::SortMode::ActiveTime );
+
+    bool grouped = m_tc.GetGroupByType();
+    if( ImGui::Checkbox( "Group by type", &grouped ) ) m_tc.SetGroupByType( grouped );
+
+    ImGui::SameLine();
+    if( ImGui::SmallButton( "Show all" ) )
+    {
+        for( const auto& kv : m_tc.GetItemMap() ) kv.second->SetVisible( true );
+    }
+    ImGui::SameLine();
+    if( ImGui::SmallButton( "Hide all" ) )
+    {
+        for( const auto& kv : m_tc.GetItemMap() ) kv.second->SetVisible( false );
+    }
+    ImGui::SameLine();
+    if( ImGui::SmallButton( "Unpin all" ) )
+    {
+        for( const auto& kv : m_tc.GetItemMap() ) kv.second->SetPinned( false );
+        m_tc.MarkDirty();
+    }
+
+    ImGui::Separator();
+
+    const auto& ordered = m_tc.GetCurrentOrder();
+    const void* dropSrc = nullptr;
+    const void* dropTarget = nullptr;
+
+    int idx = 0;
+    for( auto* item : ordered )
+    {
+        ImGui::PushID( idx++ );
+
+        const auto gapY = ImGui::GetCursorScreenPos().y;
+        ImGui::InvisibleButton( "##gap", ImVec2( ImGui::GetContentRegionAvail().x, 4 ) );
+        if( ImGui::BeginDragDropTarget() )
+        {
+            if( auto payload = ImGui::AcceptDragDropPayload( "TimelineItemOrder", ImGuiDragDropFlags_AcceptNoDrawDefaultRect ) )
+            {
+                dropSrc = *(const void**)payload->Data;
+                dropTarget = item->GetKey();
+            }
+            const auto wposx = ImGui::GetCursorScreenPos().x;
+            ImGui::GetWindowDrawList()->AddLine(
+                ImVec2( wposx, gapY + 2 ),
+                ImVec2( wposx + ImGui::GetContentRegionAvail().x, gapY + 2 ),
+                ImGui::GetColorU32( ImGuiCol_DragDropTarget ), 2.f );
+            ImGui::EndDragDropTarget();
+        }
+
+        bool pinned = item->IsPinned();
+        if( SmallCheckbox( ICON_FA_THUMBTACK "##pin", &pinned ) )
+        {
+            item->SetPinned( pinned );
+            m_tc.MarkDirty();
+        }
+        if( ImGui::IsItemHovered() ) ImGui::SetTooltip( "Pin to top" );
+        ImGui::SameLine();
+
+        bool visible = item->IsVisible();
+        if( SmallCheckbox( "##vis", &visible ) ) item->SetVisible( visible );
+        if( ImGui::IsItemHovered() ) ImGui::SetTooltip( "Visible" );
+        ImGui::SameLine();
+
+        const auto typeColor = item->HeaderColor();
+        SmallColorBox( typeColor );
+        ImGui::SameLine();
+        ImGui::Selectable( item->HeaderLabel(), false, ImGuiSelectableFlags_AllowOverlap );
+
+        if( ImGui::BeginDragDropSource( ImGuiDragDropFlags_SourceNoHoldToOpenOthers ) )
+        {
+            const void* key = item->GetKey();
+            ImGui::SetDragDropPayload( "TimelineItemOrder", &key, sizeof(key) );
+            SmallColorBox( typeColor );
+            ImGui::SameLine();
+            ImGui::TextUnformatted( item->HeaderLabel() );
+            ImGui::EndDragDropSource();
+        }
+
+        ImGui::PopID();
+    }
+
+    // Trailing drop strip.
+    {
+        const auto gapY = ImGui::GetCursorScreenPos().y;
+        ImGui::PushID( idx );
+        ImGui::InvisibleButton( "##gapEnd", ImVec2( ImGui::GetContentRegionAvail().x, 4 ) );
+        if( ImGui::BeginDragDropTarget() )
+        {
+            if( auto payload = ImGui::AcceptDragDropPayload( "TimelineItemOrder", ImGuiDragDropFlags_AcceptNoDrawDefaultRect ) )
+            {
+                dropSrc = *(const void**)payload->Data;
+                dropTarget = nullptr;
+            }
+            const auto wposx = ImGui::GetCursorScreenPos().x;
+            ImGui::GetWindowDrawList()->AddLine(
+                ImVec2( wposx, gapY + 2 ),
+                ImVec2( wposx + ImGui::GetContentRegionAvail().x, gapY + 2 ),
+                ImGui::GetColorU32( ImGuiCol_DragDropTarget ), 2.f );
+            ImGui::EndDragDropTarget();
+        }
+        ImGui::PopID();
+    }
+
+    if( dropSrc ) m_tc.MoveItem( dropSrc, dropTarget );
 
     ImGui::End();
 }

@@ -3,6 +3,7 @@
 #include "TracyImGui.hpp"
 #include "TracyMouse.hpp"
 #include "TracyTimelineContext.hpp"
+#include "TracyTimelineController.hpp"
 #include "TracyTimelineItem.hpp"
 #include "TracyView.hpp"
 
@@ -136,6 +137,33 @@ void TimelineItem::Draw( bool firstFrame, const TimelineContext& ctx, int yOffse
         {
             SetVisible( false );
             ImGui::CloseCurrentPopup();
+        }
+        auto& tc = m_view.GetTimelineController();
+        if( ImGui::MenuItem( m_pinned ? ICON_FA_THUMBTACK " Unpin" : ICON_FA_THUMBTACK " Pin to top", nullptr, m_pinned ) )
+        {
+            m_pinned = !m_pinned;
+            tc.MarkDirty();
+        }
+        if( ImGui::MenuItem( ICON_FA_SHUFFLE " Configure lanes..." ) )
+        {
+            m_view.ShowLaneConfig();
+            ImGui::CloseCurrentPopup();
+        }
+        const auto mode = tc.GetSortMode();
+        if( ImGui::BeginMenu( ICON_FA_SHUFFLE " Sort timeline by" ) )
+        {
+            if( ImGui::MenuItem( "Name", nullptr, mode == TimelineController::SortMode::Name ) )
+                tc.SetSortMode( TimelineController::SortMode::Name );
+            if( ImGui::MenuItem( "Active time", nullptr, mode == TimelineController::SortMode::ActiveTime ) )
+                tc.SetSortMode( TimelineController::SortMode::ActiveTime );
+            ImGui::Separator();
+            if( ImGui::MenuItem( "Manual order", nullptr, mode == TimelineController::SortMode::Manual ) )
+                tc.SetSortMode( TimelineController::SortMode::Manual );
+            ImGui::Separator();
+            bool grouped = tc.GetGroupByType();
+            if( ImGui::MenuItem( "Group by type", nullptr, grouped ) )
+                tc.SetGroupByType( !grouped );
+            ImGui::EndMenu();
         }
         DrawExtraPopupItems();
         ImGui::EndPopup();

@@ -51,9 +51,9 @@ public:
     const void* GetKey() const { return m_key; }
 
     virtual const char* HeaderLabel() const = 0;
+    virtual uint32_t HeaderColor() const = 0;
 
 protected:
-    virtual uint32_t HeaderColor() const = 0;
     virtual uint32_t HeaderColorInactive() const = 0;
     virtual uint32_t HeaderLineColor() const = 0;
 

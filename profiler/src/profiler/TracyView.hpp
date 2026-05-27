@@ -160,6 +160,7 @@ public:
 
     Vector<const ThreadData*>& GetThreadOrderMutable() { return m_threadOrder; }
     TimelineController& GetTimelineController() { return m_tc; }
+    void ShowLaneConfig() { m_showLaneConfig = true; }
 
     const MessageData* GetMessageHighlight() const { return m_msgHighlight; }
     uint32_t GetLockInfoWindow() const { return m_lockInfoWindow; }
@@ -307,6 +308,7 @@ private:
     void DrawPlotPoint( const ImVec2& wpos, float x, float y, int offset, uint32_t color, bool hover, bool hasPrev, const PlotItem& item, double prev, PlotType type, PlotValueFormatting format, float PlotHeight, uint64_t name );
     void DrawPlotPoint( const ImVec2& wpos, float x, float y, int offset, uint32_t color, bool hover, double val, PlotValueFormatting format, float PlotHeight );
     void DrawOptions();
+    void DrawLaneConfig();
     void DrawMessages();
     void DrawMessageLine( const MessageData& msg, bool hasCallstack, int& idx );
     void DrawFindZone();
@@ -596,6 +598,7 @@ private:
     int64_t m_gpuEnd = 0;
 
     bool m_showOptions = false;
+    bool m_showLaneConfig = false;
     bool m_showMessages = false;
     bool m_showStatistics = false;
     bool m_showInfo = false;
