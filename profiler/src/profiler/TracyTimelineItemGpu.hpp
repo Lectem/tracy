@@ -14,6 +14,8 @@ public:
 
     int GetIdx() const { return m_idx; }
 
+    TimelineItemGroup GetType() const override { return TimelineItemGroup::Gpu; }
+
 protected:
     uint32_t HeaderColor() const override { return 0xFFFFAAAA; }
     uint32_t HeaderColorInactive() const override { return 0xFF886666; }

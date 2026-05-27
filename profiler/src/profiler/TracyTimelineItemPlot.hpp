@@ -13,6 +13,8 @@ class TimelineItemPlot final : public TimelineItem
 public:
     TimelineItemPlot( View& view, Worker& worker, PlotData* plot );
 
+    TimelineItemGroup GetType() const override { return TimelineItemGroup::Plot; }
+
 protected:
     uint32_t HeaderColor() const override { return 0xFF44DDDD; }
     uint32_t HeaderColorInactive() const override { return 0xFF226E6E; }

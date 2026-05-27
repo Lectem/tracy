@@ -14,11 +14,21 @@ class TaskDispatch;
 class View;
 class Worker;
 
+enum class TimelineItemGroup : int
+{
+    Gpu = 0,
+    Cpu = 1,
+    Thread = 2,
+    Plot = 3,
+};
+
 class TimelineItem
 {
 public:
     TimelineItem( View& view, Worker& worker, const void* key, bool wantPreprocess );
     virtual ~TimelineItem() = default;
+
+    virtual TimelineItemGroup GetType() const = 0;
 
     // draws the timeline item and also updates the next frame height value
     void Draw( bool firstFrame, const TimelineContext& ctx, int yOffset );

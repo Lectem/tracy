@@ -13,6 +13,8 @@ class TimelineItemThread final : public TimelineItem
 public:
     TimelineItemThread( View& view, Worker& worker, const ThreadData* plot );
 
+    TimelineItemGroup GetType() const override { return TimelineItemGroup::Thread; }
+
 protected:
     uint32_t HeaderColor() const override;
     uint32_t HeaderColorInactive() const override;

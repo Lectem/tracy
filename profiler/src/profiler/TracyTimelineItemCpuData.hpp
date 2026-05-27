@@ -16,6 +16,8 @@ public:
     void SetVisible( bool visible ) override;
     bool IsVisible() const override;
 
+    TimelineItemGroup GetType() const override { return TimelineItemGroup::Cpu; }
+
 protected:
     uint32_t HeaderColor() const override { return 0xFFDD88DD; }
     uint32_t HeaderColorInactive() const override { return 0xFF6E446E; }
