@@ -54,6 +54,7 @@ public:
     }
 
     void MoveItem( const void* srcKey, const void* targetKey );
+    void MarkDirty() { m_orderDirty = true; }
 
     SortMode GetSortMode() const { return m_sortMode; }
     void SetSortMode( SortMode mode );

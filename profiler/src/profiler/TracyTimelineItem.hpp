@@ -42,6 +42,9 @@ public:
 
     void SetShowFull( bool showFull ) { m_showFull = showFull; }
 
+    bool IsPinned() const { return m_pinned; }
+    void SetPinned( bool v ) { m_pinned = v; }
+
     // returns 0 instead of the correct value for the first frame
     int GetHeight() const { return m_height; }
 
@@ -69,6 +72,7 @@ protected:
 
     bool m_visible;
     bool m_showFull;
+    bool m_pinned;
 
 private:
     void AdjustThreadHeight( bool firstFrame, int yBegin, int yEnd );

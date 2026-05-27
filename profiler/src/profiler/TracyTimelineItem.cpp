@@ -12,6 +12,7 @@ namespace tracy
 TimelineItem::TimelineItem( View& view, Worker& worker, const void* key, bool wantPreprocess )
     : m_visible( true )
     , m_showFull( true )
+    , m_pinned( false )
     , m_height( 0 )
     , m_wantPreprocess( wantPreprocess )
     , m_key( key )

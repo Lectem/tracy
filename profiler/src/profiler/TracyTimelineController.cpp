@@ -219,6 +219,11 @@ void TimelineController::ApplyOrder()
             } );
     }
 
+    std::stable_sort( m_items.begin(), m_items.end(),
+        []( const TimelineItem* a, const TimelineItem* b ) {
+            return a->IsPinned() && !b->IsPinned();
+        } );
+
     SyncThreadOrder();
 }
 
