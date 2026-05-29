@@ -33,6 +33,9 @@
 #include "client/TracyAlloc.cpp"
 #include "client/TracyOverride.cpp"
 #include "client/TracyKCore.cpp"
+#ifdef TRACY_FAIR_DEQUEUE
+#  include "client/TracyFairDequeue.cpp"
+#endif
 
 #ifdef TRACY_ROCPROF
 #  include "client/TracyRocprof.cpp"

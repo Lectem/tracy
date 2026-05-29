@@ -129,6 +129,7 @@ set_option(TRACY_PATCHABLE_NOPSLEDS "Enable nopsleds for efficient patching by s
 set_option(TRACY_DELAYED_INIT "Enable delayed initialization of the library (init on first call)" OFF TracyClient)
 set_option(TRACY_MANUAL_LIFETIME "Enable the manual lifetime management of the profile" OFF TracyClient)
 set_option(TRACY_FIBERS "Enable fibers support" OFF TracyClient)
+set_option(TRACY_FAIR_DEQUEUE "Experimental watermark-based producer scheduling on the comm thread" OFF TracyClient)
 set_option(TRACY_NO_CRASH_HANDLER "Disable crash handling" OFF TracyClient)
 set_option(TRACY_TIMER_FALLBACK "Use lower resolution timers" OFF TracyClient)
 set_option(TRACY_DISALLOW_HW_TIMER "Disallow hardware timer (may be useful on VMs). Requires TRACY_TIMER_FALLBACK=ON" OFF TracyClient)

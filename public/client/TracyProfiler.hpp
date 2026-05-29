@@ -21,6 +21,10 @@
 #include "../common/TracyAlloc.hpp"
 #include "../common/TracyMutex.hpp"
 #include "../common/TracyProtocol.hpp"
+#define TRACY_FAIR_DEQUEUE
+#ifdef TRACY_FAIR_DEQUEUE
+#  include "TracyFairDequeue.hpp"
+#endif
 
 #ifdef TRACY_PLATFORM_HEADER
 #  include TRACY_PLATFORM_HEADER
@@ -904,6 +908,9 @@ private:
     void ClearQueues( tracy::moodycamel::ConsumerToken& token );
     void ClearSerial();
     DequeueStatus Dequeue( tracy::moodycamel::ConsumerToken& token );
+#ifdef TRACY_FAIR_DEQUEUE
+    FairDequeueState m_fairDequeue;
+#endif
     DequeueStatus DequeueContextSwitches( tracy::moodycamel::ConsumerToken& token, int64_t& timeStop );
     DequeueStatus DequeueSerial();
     ThreadCtxStatus ThreadCtxCheck( uint32_t threadId );

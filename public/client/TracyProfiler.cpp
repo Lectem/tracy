@@ -2002,6 +2002,9 @@ void Profiler::Worker()
         m_refTimeSerial = 0;
         m_refTimeCtx = 0;
         m_refTimeGpu = 0;
+#ifdef TRACY_FAIR_DEQUEUE
+        m_fairDequeue.Reset();
+#endif
 
 #ifdef TRACY_ON_DEMAND
         OnDemandPayloadMessage onDemand;
@@ -2452,6 +2455,10 @@ void Profiler::ClearQueues( moodycamel::ConsumerToken& token )
         if( sz == 0 ) break;
     }
 
+#ifdef TRACY_FAIR_DEQUEUE
+    m_fairDequeue.Reset();
+#endif
+
     ClearSerial();
 }
 
@@ -2480,20 +2487,38 @@ void Profiler::ClearSerial()
 Profiler::DequeueStatus Profiler::Dequeue( moodycamel::ConsumerToken& token )
 {
     bool connectionLost = false;
+
+#ifdef TRACY_FAIR_DEQUEUE
+    using producer_t = moodycamel::ConcurrentQueue<QueueItem>::ExplicitProducer;
+    producer_t* fairProd = m_fairDequeue.SelectProducer( GetQueue() );
+    size_t sz = 0;
+    if( fairProd )
+    {
+        sz = GetQueue().try_dequeue_bulk_from( fairProd, 8192,
+#else
     const auto sz = GetQueue().try_dequeue_bulk_single( token,
+#endif
         [this, &connectionLost] ( const uint32_t& threadId )
         {
             if( ThreadCtxCheck( threadId ) == ThreadCtxStatus::ConnectionLost ) connectionLost = true;
         },
-        [this, &connectionLost] ( QueueItem* item, size_t sz )
+#ifdef TRACY_FAIR_DEQUEUE
+        [this, &connectionLost, fairProd] ( QueueItem* item, size_t batchSz )
         {
             if( connectionLost ) return;
+            m_fairDequeue.NoteBatchShipped( item, batchSz );
+            m_fairDequeue.SetRotate( fairProd, GetQueue().producer_tail() );
+#else
+        [this, &connectionLost] ( QueueItem* item, size_t batchSz )
+        {
+            if( connectionLost ) return;
+#endif
             InitAllocator();
-            assert( sz > 0 );
+            assert( batchSz > 0 );
             int64_t refThread = m_refTimeThread;
             int64_t refCtx = m_refTimeCtx;
             int64_t refGpu = m_refTimeGpu;
-            while( sz-- > 0 )
+            while( batchSz-- > 0 )
             {
                 uint64_t ptr;
                 uint16_t size;
@@ -2852,7 +2877,12 @@ Profiler::DequeueStatus Profiler::Dequeue( moodycamel::ConsumerToken& token )
             m_refTimeCtx = refCtx;
             m_refTimeGpu = refGpu;
         }
+#ifdef TRACY_FAIR_DEQUEUE
+        );
+    }
+#else
     );
+#endif
     if( connectionLost ) return DequeueStatus::ConnectionLost;
     return sz > 0 ? DequeueStatus::DataDequeued : DequeueStatus::QueueEmpty;
 }

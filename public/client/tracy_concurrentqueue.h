@@ -555,6 +555,27 @@ public:
         }
     }
 
+	ExplicitProducer* producer_tail() const
+	{
+		return static_cast<ExplicitProducer*>( producerListTail.load( std::memory_order_acquire ) );
+	}
+
+	bool try_peek_front( ExplicitProducer* prod, T& out ) const
+	{
+		return prod != nullptr && prod->try_peek_front( out );
+	}
+
+	template<class NotifyThread, class ProcessData>
+	size_t try_dequeue_bulk_from( ExplicitProducer* prod, size_t maxCount, NotifyThread notifyThread, ProcessData processData )
+	{
+		if( prod == nullptr )
+		{
+			return 0;
+		}
+		const auto count = prod->dequeue_bulk( notifyThread, processData, maxCount );
+		return count;
+	}
+
 
 	// Returns an estimate of the total number of elements currently in the queue. This
 	// estimate is only accurate if the queue has completely stabilized before it is called
@@ -900,9 +921,9 @@ private:
 		virtual ~ProducerBase() { };
 
 		template<class NotifyThread, class ProcessData>
-		inline size_t dequeue_bulk(NotifyThread notifyThread, ProcessData processData)
+		inline size_t dequeue_bulk(NotifyThread notifyThread, ProcessData processData, size_t maxCount = 8192)
 		{
-			return static_cast<ExplicitProducer*>(this)->dequeue_bulk(notifyThread, processData);
+			return static_cast<ExplicitProducer*>(this)->dequeue_bulk(notifyThread, processData, maxCount);
 		}
 
 		inline ProducerBase* next_prod() const { return static_cast<ProducerBase*>(next); }
@@ -1076,14 +1097,36 @@ private:
             return this->tailIndex;
         }
 
+		bool try_peek_front( T& out ) const
+		{
+			auto head = this->headIndex.load( std::memory_order_acquire );
+			auto tail = this->tailIndex.load( std::memory_order_acquire );
+			if( !details::circular_less_than( head, tail ) )
+			{
+				return false;
+			}
+
+			auto localBlockIndex = blockIndex.load( std::memory_order_acquire );
+			auto localBlockIndexHead = localBlockIndex->front.load( std::memory_order_acquire );
+
+			auto headBase = localBlockIndex->entries[localBlockIndexHead].base;
+			auto firstBlockBaseIndex = head & ~static_cast<index_t>( BLOCK_SIZE - 1 );
+			auto offset = static_cast<size_t>( static_cast<typename std::make_signed<index_t>::type>( firstBlockBaseIndex - headBase ) / BLOCK_SIZE );
+			auto indexIndex = ( localBlockIndexHead + offset ) & ( localBlockIndex->size - 1 );
+			auto block = localBlockIndex->entries[indexIndex].block;
+
+			out = *( (*block)[head] );
+			return true;
+		}
+
 		template<class NotifyThread, class ProcessData>
-		size_t dequeue_bulk(NotifyThread notifyThread, ProcessData processData)
+		size_t dequeue_bulk(NotifyThread notifyThread, ProcessData processData, size_t maxCount = 8192)
 		{
 			auto tail = this->tailIndex.load(std::memory_order_relaxed);
 			auto overcommit = this->dequeueOvercommit.load(std::memory_order_relaxed);
 			auto desiredCount = static_cast<size_t>(tail - (this->dequeueOptimisticCount.load(std::memory_order_relaxed) - overcommit));
 			if (details::circular_less_than<size_t>(0, desiredCount)) {
-				desiredCount = desiredCount < 8192 ? desiredCount : 8192;
+				desiredCount = desiredCount < maxCount ? desiredCount : maxCount;
 				std::atomic_thread_fence(std::memory_order_acquire);
 
 				auto myDequeueCount = this->dequeueOptimisticCount.fetch_add(desiredCount, std::memory_order_relaxed);
