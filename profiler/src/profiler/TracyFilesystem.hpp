@@ -10,11 +10,15 @@ namespace tracy
 class View;
 class Worker;
 
-static inline bool FileExists( const char* fn )
+// Size of a regular file, -1 if there is none.
+static inline int64_t FileSize( const char* fn )
 {
     struct stat buf;
-    return stat( fn, &buf ) == 0 && ( buf.st_mode & S_IFREG ) != 0;
+    if( stat( fn, &buf ) != 0 || ( buf.st_mode & S_IFREG ) == 0 ) return -1;
+    return buf.st_size;
 }
+
+static inline bool FileExists( const char* fn ) { return FileSize( fn ) >= 0; }
 
 bool SourceFileValid( const char* fn, uint64_t olderThan, const View& view, const Worker& worker );
 

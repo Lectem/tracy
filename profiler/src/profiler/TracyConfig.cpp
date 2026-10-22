@@ -48,6 +48,12 @@ void LoadConfig()
     if( v2 = ini_get( ini, "llm", "searchIdentifier" ); v2 ) s_config.llmSearchIdentifier = v2;
     if( v2 = ini_get( ini, "llm", "searchApiKey" ); v2 ) s_config.llmSearchApiKey = v2;
     if( v2 = ini_get( ini, "llm", "searchBraveApiKey" ); v2 ) s_config.llmSearchBraveApiKey = v2;
+    for( size_t i=0; i<s_recentTracesMax; i++ )
+    {
+        char key[16];
+        snprintf( key, sizeof( key ), "path%zu", i );
+        if( v2 = ini_get( ini, "recent", key ); v2 && *v2 ) s_config.recentTraces.emplace_back( v2 );
+    }
     if( ini_sget( ini, "llm", "annotateCallstacks", "%d", &v ) ) s_config.llmAnnotateCallstacks = v;
     if( ini_sget( ini, "llm", "limitToolReplySize", "%d", &v ) ) s_config.llmLimitToolReplySize = v;
     if( ini_sget( ini, "llm", "maxToolReplySizeValue", "%d", &v ) ) s_config.llmMaxToolReplySizeValue = v;
@@ -57,6 +63,25 @@ void LoadConfig()
     if( ini_sget( ini, "llm", "personality", "%d", &v ) ) s_config.llmPersonality = v;
 
     ini_free( ini );
+}
+
+// Quoted, so that spaces and quotes survive the ini parser.
+static void WriteQuotedValue( FILE* f, const std::string& str )
+{
+    fputc( '"', f );
+    for( const char c : str )
+    {
+        switch( c )
+        {
+        case '"':  fputs( "\\\"", f ); break;
+        case '\\': fputs( "\\\\", f ); break;
+        case '\n': fputs( "\\n", f ); break;
+        case '\r': fputs( "\\r", f ); break;
+        case '\t': fputs( "\\t", f ); break;
+        default:   fputc( c, f ); break;
+        }
+    }
+    fputs( "\"\n", f );
 }
 
 bool SaveConfig()
@@ -94,6 +119,13 @@ bool SaveConfig()
     fprintf( f, "saveUserScale = %i\n", (int)s_config.saveUserScale );
     fprintf( f, "zoomLevel = %i\n", s_config.zoomLevel );
 
+    fprintf( f, "\n[recent]\n" );
+    for( size_t i=0; i<s_config.recentTraces.size(); i++ )
+    {
+        fprintf( f, "path%zu = ", i );
+        WriteQuotedValue( f, s_config.recentTraces[i] );
+    }
+
     fprintf( f, "\n[llm]\n" );
     fprintf( f, "enabled = %i\n", (int)s_config.llm );
     fprintf( f, "address = %s\n", s_config.llmAddress.c_str() );
@@ -114,6 +146,24 @@ bool SaveConfig()
 
     fclose( f );
     return true;
+}
+
+void AddRecentTrace( const char* path )
+{
+#ifdef __EMSCRIPTEN__
+    // The uploaded file is temporary.
+    return;
+#else
+    auto& v = s_config.recentTraces;
+    for( auto it = v.begin(); it != v.end(); ++it )
+    {
+        if( *it == path ) { v.erase( it ); break; }
+    }
+    v.insert( v.begin(), path );
+    if( v.size() > s_recentTracesMax ) v.resize( s_recentTracesMax );
+    s_config.recentTracesRevision++;
+    SaveConfig();
+#endif
 }
 
 }

@@ -38,6 +38,7 @@
 #include "profiler/TracyBadVersion.hpp"
 #include "profiler/TracyConfig.hpp"
 #include "profiler/TracyFileselector.hpp"
+#include "profiler/TracyFilesystem.hpp"
 #include "profiler/TracyImGui.hpp"
 #include "profiler/TracyManualWindow.hpp"
 #include "profiler/TracyMarkdown.hpp"
@@ -624,6 +625,53 @@ struct AttentionDance
     static constexpr float scaleAmplitude = 0.4f;
 };
 
+#ifndef TRACY_NO_FILESELECTOR
+static void OpenTraceFile( const char* fn )
+{
+    try
+    {
+        auto f = std::shared_ptr<tracy::FileRead>( tracy::FileRead::Open( fn ) );
+        if( f )
+        {
+            loadThread = std::thread( [f, path = std::string( fn )] {
+                try
+                {
+                    view.store( std::make_shared<tracy::View>( RunOnMainThread, *f, SetWindowTitleCallback, SetupScaleCallback, AttentionCallback, s_achievements ), std::memory_order_release );
+                    RunOnMainThread( [path] { tracy::AddRecentTrace( path.c_str() ); } );
+                }
+                catch( const tracy::UnsupportedVersion& e )
+                {
+                    badVer.state = tracy::BadVersionState::UnsupportedVersion;
+                    badVer.version = e.version;
+                }
+                catch( const tracy::LegacyVersion& e )
+                {
+                    badVer.state = tracy::BadVersionState::LegacyVersion;
+                    badVer.version = e.version;
+                }
+                catch( const tracy::LoadFailure& e )
+                {
+                    badVer.state = tracy::BadVersionState::LoadFailure;
+                    badVer.msg = e.msg;
+                }
+            } );
+        }
+        else
+        {
+            badVer.state = tracy::BadVersionState::ReadError;
+        }
+    }
+    catch( const tracy::NotTracyDump& )
+    {
+        badVer.state = tracy::BadVersionState::BadFile;
+    }
+    catch( const tracy::FileReadError& )
+    {
+        badVer.state = tracy::BadVersionState::ReadError;
+    }
+}
+#endif
+
 static void DrawContents()
 {
     static bool reconnect = false;
@@ -970,121 +1018,151 @@ static void DrawContents()
             ImGui::PopStyleColor();
         }
         ImGui::Separator();
-        ImGui::TextUnformatted( "Client address" );
-        bool connectClicked = false;
-        connectClicked |= ImGui::InputTextWithHint( "###connectaddress", "Enter address", addr, 1024, ImGuiInputTextFlags_EnterReturnsTrue );
-        if( !connHist->empty() )
+        if( ImGui::BeginTabBar( "##welcometabs" ) )
         {
-            ImGui::SameLine();
-            if( ImGui::BeginCombo( "##frameCombo", nullptr, ImGuiComboFlags_NoPreview ) )
+            if( ImGui::BeginTabItem( "By address" ) )
             {
-                int idxRemove = -1;
-                const auto sz = std::min<size_t>( 5, connHist->size() );
-                for( size_t i=0; i<sz; i++ )
+                ImGui::TextUnformatted( "Client address" );
+                bool connectClicked = false;
+                connectClicked |= ImGui::InputTextWithHint( "###connectaddress", "Enter address", addr, 1024, ImGuiInputTextFlags_EnterReturnsTrue );
+                if( !connHist->empty() )
                 {
-                    const auto& str = connHist->Name( i );
-                    if( ImGui::Selectable( str.c_str() ) )
+                    ImGui::SameLine();
+                    if( ImGui::BeginCombo( "##frameCombo", nullptr, ImGuiComboFlags_NoPreview ) )
                     {
-                        memcpy( addr, str.c_str(), str.size() + 1 );
+                        int idxRemove = -1;
+                        const auto sz = std::min<size_t>( 5, connHist->size() );
+                        for( size_t i=0; i<sz; i++ )
+                        {
+                            const auto& str = connHist->Name( i );
+                            if( ImGui::Selectable( str.c_str() ) )
+                            {
+                                memcpy( addr, str.c_str(), str.size() + 1 );
+                            }
+                            if( ImGui::IsItemHovered() && ImGui::IsKeyPressed( ImGuiKey_Delete, false ) )
+                            {
+                                idxRemove = (int)i;
+                            }
+                        }
+                        if( idxRemove >= 0 )
+                        {
+                            connHist->Erase( idxRemove );
+                        }
+                        ImGui::EndCombo();
                     }
-                    if( ImGui::IsItemHovered() && ImGui::IsKeyPressed( ImGuiKey_Delete, false ) )
+                }
+#ifdef __EMSCRIPTEN__
+                ImGui::BeginDisabled();
+#endif
+                connectClicked |= ImGui::Button( ICON_FA_WIFI " Connect" );
+#ifdef __EMSCRIPTEN__
+                ImGui::EndDisabled();
+                connectClicked = false;
+#endif
+                if( connectClicked && *addr && !loadThread.joinable() )
+                {
+                    auto aptr = addr;
+                    while( *aptr == ' ' || *aptr == '\t' ) aptr++;
+                    auto aend = aptr;
+                    while( *aend && *aend != ' ' && *aend != '\t' ) aend++;
+
+                    if( aptr != aend )
                     {
-                        idxRemove = (int)i;
+                        std::string address( aptr, aend );
+                        connHist->Count( address );
+
+                        auto adata = address.data();
+                        auto ptr = adata + address.size() - 1;
+                        while( ptr > adata && *ptr != ':' ) ptr--;
+                        if( *ptr == ':' )
+                        {
+                            std::string addrPart = std::string( adata, ptr );
+                            uint16_t portPart = (uint16_t)atoi( ptr+1 );
+                            view.store( std::make_shared<tracy::View>( RunOnMainThread, addrPart.c_str(), portPart, SetWindowTitleCallback, SetupScaleCallback, AttentionCallback, s_achievements ), std::memory_order_release );
+                        }
+                        else
+                        {
+                            view.store( std::make_shared<tracy::View>( RunOnMainThread, address.c_str(), port, SetWindowTitleCallback, SetupScaleCallback, AttentionCallback, s_achievements ), std::memory_order_release );
+                        }
                     }
                 }
-                if( idxRemove >= 0 )
+                if( tracy::s_config.memoryLimit )
                 {
-                    connHist->Erase( idxRemove );
+                    ImGui::SameLine();
+                    tracy::TextColoredUnformatted( 0xFF00FFFF, ICON_FA_TRIANGLE_EXCLAMATION );
+                    tracy::TooltipIfHovered( "Memory limit is active" );
                 }
-                ImGui::EndCombo();
+
+                ImGui::EndTabItem();
             }
-        }
-#ifdef __EMSCRIPTEN__
-        ImGui::BeginDisabled();
-#endif
-        connectClicked |= ImGui::Button( ICON_FA_WIFI " Connect" );
-#ifdef __EMSCRIPTEN__
-        ImGui::EndDisabled();
-        connectClicked = false;
-#endif
-        if( connectClicked && *addr && !loadThread.joinable() )
-        {
-            auto aptr = addr;
-            while( *aptr == ' ' || *aptr == '\t' ) aptr++;
-            auto aend = aptr;
-            while( *aend && *aend != ' ' && *aend != '\t' ) aend++;
-
-            if( aptr != aend )
-            {
-                std::string address( aptr, aend );
-                connHist->Count( address );
-
-                auto adata = address.data();
-                auto ptr = adata + address.size() - 1;
-                while( ptr > adata && *ptr != ':' ) ptr--;
-                if( *ptr == ':' )
-                {
-                    std::string addrPart = std::string( adata, ptr );
-                    uint16_t portPart = (uint16_t)atoi( ptr+1 );
-                    view.store( std::make_shared<tracy::View>( RunOnMainThread, addrPart.c_str(), portPart, SetWindowTitleCallback, SetupScaleCallback, AttentionCallback, s_achievements ), std::memory_order_release );
-                }
-                else
-                {
-                    view.store( std::make_shared<tracy::View>( RunOnMainThread, address.c_str(), port, SetWindowTitleCallback, SetupScaleCallback, AttentionCallback, s_achievements ), std::memory_order_release );
-                }
-            }
-        }
-        if( tracy::s_config.memoryLimit )
-        {
-            ImGui::SameLine();
-            tracy::TextColoredUnformatted( 0xFF00FFFF, ICON_FA_TRIANGLE_EXCLAMATION );
-            tracy::TooltipIfHovered( "Memory limit is active" );
-        }
-        ImGui::SameLine( 0, ImGui::GetTextLineHeight() * 2 );
-
 #ifndef TRACY_NO_FILESELECTOR
-        if( ImGui::Button( ICON_FA_FOLDER_OPEN " Open saved trace" ) && !loadThread.joinable() )
-        {
-            tracy::Fileselector::OpenFile( "tracy", "Tracy Profiler trace file", []( const char* fn ) {
-                try
+            struct RecentTrace { std::string path, name, dir; uint64_t size; };
+            static std::vector<RecentTrace> recent;
+            static bool recentValid = false;
+            static uint32_t recentRevision = 0;
+            if( ImGui::BeginTabItem( "Saved traces" ) )
+            {
+                // Checked when the tab is shown, not every frame.
+                if( !recentValid || recentRevision != tracy::s_config.recentTracesRevision )
                 {
-                    auto f = std::shared_ptr<tracy::FileRead>( tracy::FileRead::Open( fn ) );
-                    if( f )
+                    recentValid = true;
+                    recentRevision = tracy::s_config.recentTracesRevision;
+                    recent.clear();
+                    for( const auto& path : tracy::s_config.recentTraces )
                     {
-                        loadThread = std::thread( [f] {
-                            try
-                            {
-                                view.store( std::make_shared<tracy::View>( RunOnMainThread, *f, SetWindowTitleCallback, SetupScaleCallback, AttentionCallback, s_achievements ), std::memory_order_release );
-                            }
-                            catch( const tracy::UnsupportedVersion& e )
-                            {
-                                badVer.state = tracy::BadVersionState::UnsupportedVersion;
-                                badVer.version = e.version;
-                            }
-                            catch( const tracy::LegacyVersion& e )
-                            {
-                                badVer.state = tracy::BadVersionState::LegacyVersion;
-                                badVer.version = e.version;
-                            }
-                            catch( const tracy::LoadFailure& e )
-                            {
-                                badVer.state = tracy::BadVersionState::LoadFailure;
-                                badVer.msg = e.msg;
-                            }
-                        } );
+                        const int64_t size = tracy::FileSize( path.c_str() );
+                        if( size < 0 ) continue;
+                        const char* name = tracy::ShortenImageName( path.c_str() );
+                        const size_t dirLen = name - path.c_str();
+                        recent.push_back( { path, name, path.substr( 0, dirLen > 0 ? dirLen - 1 : 0 ), (uint64_t)size } );
+                        if( recent.size() == 5 ) break;
                     }
                 }
-                catch( const tracy::NotTracyDump& )
+
+                if( ImGui::Button( ICON_FA_FOLDER_OPEN " Browse…" ) && !loadThread.joinable() )
                 {
-                    badVer.state = tracy::BadVersionState::BadFile;
+                    tracy::Fileselector::OpenFile( "tracy", "Tracy Profiler trace file", OpenTraceFile );
                 }
-                catch( const tracy::FileReadError& )
+                ImGui::Separator();
+                std::string toOpen;
+                const ImGuiTableFlags flags = ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg;
+                if( recent.empty() )
                 {
-                    badVer.state = tracy::BadVersionState::ReadError;
+                    ImGui::TextDisabled( "No recent traces." );
                 }
-            } );
-        }
+                else if( ImGui::BeginTable( "##recenttraces", 3, flags ) )
+                {
+                    ImGui::TableSetupColumn( "Name", ImGuiTableColumnFlags_WidthStretch );
+                    ImGui::TableSetupColumn( "Size", ImGuiTableColumnFlags_WidthFixed, ImGui::GetTextLineHeight() * 5 );
+                    ImGui::TableSetupColumn( "Directory", ImGuiTableColumnFlags_WidthStretch );
+                    ImGui::TableHeadersRow();
+
+                    for( size_t i=0; i<recent.size(); i++ )
+                    {
+                        const auto& r = recent[i];
+                        ImGui::TableNextRow();
+                        ImGui::PushID( (int)i );
+                        ImGui::TableNextColumn();
+                        if( ImGui::Selectable( r.name.c_str(), false, ImGuiSelectableFlags_SpanAllColumns ) && !loadThread.joinable() ) toOpen = r.path;
+                        tracy::TooltipIfHovered( r.path.c_str() );
+                        ImGui::PopID();
+                        ImGui::TableNextColumn();
+                        if( r.size != 0 ) ImGui::TextUnformatted( tracy::MemSizeToString( r.size ) );
+                        ImGui::TableNextColumn();
+                        ImGui::TextDisabled( "%s", r.dir.c_str() );
+                    }
+                    ImGui::EndTable();
+                }
+                ImGui::EndTabItem();
+                if( !toOpen.empty() ) OpenTraceFile( toOpen.c_str() );
+            }
+            else
+            {
+                recentValid = false;
+            }
 #endif
+            ImGui::EndTabBar();
+        }
 
         if( badVer.state != tracy::BadVersionState::Ok )
         {

@@ -2,6 +2,7 @@
 #define __TRACYCONFIG_HPP__
 
 #include <string>
+#include <vector>
 
 #include "TracyUtility.hpp"
 
@@ -36,6 +37,9 @@ struct Config
     bool saveUserScale = false;
     int zoomLevel = s_zoomPreset100;
 
+    std::vector<std::string> recentTraces;  // most recent first
+    uint32_t recentTracesRevision = 0;      // incremented whenever recentTraces changes
+
     // LLM assistant settings
 #ifdef __EMSCRIPTEN__
     bool llm = false;
@@ -63,6 +67,9 @@ extern Config s_config;
 
 void LoadConfig();
 bool SaveConfig();
+
+constexpr size_t s_recentTracesMax = 10;
+void AddRecentTrace( const char* path );
 
 }
 

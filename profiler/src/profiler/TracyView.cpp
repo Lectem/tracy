@@ -689,6 +689,7 @@ bool View::Draw()
         if( ImGui::Button( ICON_FA_FLOPPY_DISK " Save trace" ) )
         {
             saveFailed = !Save( fn, comp, zlvl, buildDict, streams );
+            if( !saveFailed ) AddRecentTrace( fn );
             m_filenameStaging.clear();
             ImGui::CloseCurrentPopup();
             Achieve( "saveTrace" );
