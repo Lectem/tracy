@@ -48,6 +48,7 @@ void LoadConfig()
     if( v2 = ini_get( ini, "llm", "searchIdentifier" ); v2 ) s_config.llmSearchIdentifier = v2;
     if( v2 = ini_get( ini, "llm", "searchApiKey" ); v2 ) s_config.llmSearchApiKey = v2;
     if( v2 = ini_get( ini, "llm", "searchBraveApiKey" ); v2 ) s_config.llmSearchBraveApiKey = v2;
+    if( v2 = ini_get( ini, "attach", "filter" ); v2 ) s_config.attachFilter = v2;
     for( size_t i=0; i<s_recentTracesMax; i++ )
     {
         char key[16];
@@ -118,6 +119,10 @@ bool SaveConfig()
     fprintf( f, "\n[ui]\n" );
     fprintf( f, "saveUserScale = %i\n", (int)s_config.saveUserScale );
     fprintf( f, "zoomLevel = %i\n", s_config.zoomLevel );
+
+    fprintf( f, "\n[attach]\n" );
+    fprintf( f, "filter = " );
+    WriteQuotedValue( f, s_config.attachFilter );
 
     fprintf( f, "\n[recent]\n" );
     for( size_t i=0; i<s_config.recentTraces.size(); i++ )

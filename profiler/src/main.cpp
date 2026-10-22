@@ -35,6 +35,8 @@
 #include "../../public/common/TracyProtocol.hpp"
 #include "../../public/common/TracyVersion.hpp"
 #include "profiler/TracyAchievements.hpp"
+#include "profiler/TracyAttach.hpp"
+#include "profiler/TracyAttachUI.hpp"
 #include "profiler/TracyBadVersion.hpp"
 #include "profiler/TracyConfig.hpp"
 #include "profiler/TracyFileselector.hpp"
@@ -684,6 +686,11 @@ static void DrawContents()
     UpdateBroadcastClients();
 #endif
 
+    // Polled even when idle, to see the monitor exit.
+    if( tracy::PollAttach( [] ( const char* addr, uint16_t port ) {
+        view.store( std::make_shared<tracy::View>( RunOnMainThread, addr, port, SetWindowTitleCallback, SetupScaleCallback, AttentionCallback, s_achievements ), std::memory_order_release );
+    }, view.load( std::memory_order_acquire ) != nullptr, loadThread.joinable() ) ) tracy::s_wasActive = true;
+
     int display_w, display_h;
     bptr->NewFrame( display_w, display_h );
 
@@ -1095,6 +1102,24 @@ static void DrawContents()
 
                 ImGui::EndTabItem();
             }
+#ifdef __linux__
+            {
+                static bool monitorAvailable = tracy::MonitorAvailable();
+                ImGui::BeginDisabled( !monitorAvailable );
+                if( ImGui::BeginTabItem( "Monitor" ) )
+                {
+                    tracy::DrawAttachEntry();
+                    ImGui::EndTabItem();
+                }
+                ImGui::EndDisabled();
+                if( !monitorAvailable && ImGui::IsItemHovered( ImGuiHoveredFlags_AllowWhenDisabled ) )
+                {
+                    ImGui::SetTooltip( "tracy-monitor not found: put it next to the profiler or in PATH" );
+                    // Recheck on click, so that installing the monitor needs no restart.
+                    if( ImGui::IsMouseClicked( ImGuiMouseButton_Left ) ) monitorAvailable = tracy::MonitorAvailable();
+                }
+            }
+#endif
 #ifndef TRACY_NO_FILESELECTOR
             struct RecentTrace { std::string path, name, dir; uint64_t size; };
             static std::vector<RecentTrace> recent;

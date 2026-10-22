@@ -37,6 +37,7 @@ struct Config
     bool saveUserScale = false;
     int zoomLevel = s_zoomPreset100;
 
+    std::string attachFilter;  // process filter of the Monitor tab
     std::vector<std::string> recentTraces;  // most recent first
     uint32_t recentTracesRevision = 0;      // incremented whenever recentTraces changes
 
