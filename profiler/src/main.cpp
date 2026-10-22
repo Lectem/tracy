@@ -919,6 +919,14 @@ static void DrawContents()
             ImGui::EndPopup();
         }
         ImGui::Spacing();
+        {
+            const ImGuiStyle& style = ImGui::GetStyle();
+            const char* const labels[] = { ICON_FA_BOOK " Manual", ICON_FA_EARTH_AMERICAS " Web", ICON_FA_COMMENTS " Chat", ICON_FA_HEART " Sponsor" };
+            float rowWidth = -style.ItemSpacing.x;
+            for( const char* label : labels ) rowWidth += ImGui::CalcTextSize( label ).x + style.FramePadding.x * 2 + style.ItemSpacing.x;
+            const float offset = ( ImGui::GetContentRegionAvail().x - rowWidth ) * 0.5f;
+            if( offset > 0 ) ImGui::SetCursorPosX( ImGui::GetCursorPosX() + offset );
+        }
         if( ImGui::Button( ICON_FA_BOOK " Manual" ) )
         {
             tracy::GetManualWindow().Show() = true;
