@@ -19,6 +19,7 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/resource.h>
+#include <sys/prctl.h>
 #include <sys/ptrace.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -58,6 +59,7 @@
 static volatile sig_atomic_t s_shouldQuit = 0;
 static pid_t s_targetPid = 0;
 static bool s_isForked = false;
+static bool s_exitWithParent = false;
 
 static void SignalHandler( int /*sig*/ )
 {
@@ -339,7 +341,7 @@ static const char* FormatHz( int hz )
     return buf;
 }
 
-static int EffectiveSamplingHz()
+static int RequestedSamplingHz()
 {
     const char* env = getenv( "TRACY_SAMPLING_HZ" );
     int hz = 10000; // client default on Linux
@@ -348,15 +350,19 @@ static int EffectiveSamplingHz()
         const int parsed = atoi( env );
         if( parsed > 0 ) hz = ( parsed > 1000000 ) ? 1000000 : parsed;
     }
-    // mirror the client's clamp: the kernel caps the rate at perf_event_max_sample_rate
-    FILE* f = fopen( "/proc/sys/kernel/perf_event_max_sample_rate", "r" );
-    if( f )
-    {
-        int sysMax = 0;
-        if( fscanf( f, "%d", &sysMax ) == 1 && sysMax > 0 && sysMax < hz ) hz = sysMax;
-        fclose( f );
-    }
     return hz;
+}
+
+// Mirrors the client's clamp to perf_event_max_sample_rate
+static int EffectiveSamplingHz()
+{
+    const int hz = RequestedSamplingHz();
+    FILE* f = fopen( "/proc/sys/kernel/perf_event_max_sample_rate", "r" );
+    if( !f ) return hz;
+    int sysMax = 0;
+    if( fscanf( f, "%d", &sysMax ) != 1 ) sysMax = 0;
+    fclose( f );
+    return ( sysMax > 0 && sysMax < hz ) ? sysMax : hz;
 }
 
 static int EffectivePort()
@@ -389,7 +395,14 @@ static void PrintStartupReport( bool kernelFrames, bool hwStats, int hwErrno, co
 
     printf( "tracy-monitor %i.%i.%i / %s\n", tracy::Version::Major, tracy::Version::Minor, tracy::Version::Patch, tracy::GitRef );
     printf( "Profiling '%s' (pid %d) on port %d\n", tracy::GetExternalTargetName(), (int)tracy::GetExternalTargetPid(), EffectivePort() );
-    printf( "  sampling:                      %s, %s callchain — leaf-only stacks for -fomit-frame-pointer targets\n", FormatHz( EffectiveSamplingHz() ), kernelFrames ? "kernel" : "user-space" );
+    // Sources are reported as "name: state detail", state is yes, no or warning.
+    const int requestedHz = RequestedSamplingHz();
+    const int effectiveHz = EffectiveSamplingHz();
+    printf( "  sampling:                      %s %s, %s callchain (leaf-only stacks for -fomit-frame-pointer targets)\n", effectiveHz < requestedHz ? "warning" : "yes", FormatHz( effectiveHz ), kernelFrames ? "kernel" : "user-space" );
+    if( effectiveHz < requestedHz )
+    {
+        printf( "                                 requested %s, capped by kernel.perf_event_max_sample_rate (raise it with: sudo sysctl kernel.perf_event_max_sample_rate=%d)\n", FormatHz( requestedHz ), requestedHz );
+    }
     printf( "  kernel frames:                 %s\n", kernelFrames ? "yes" : "no (kernel sampling denied — perf_event_paranoid > 1 without CAP_PERFMON)" );
     if( hwStats )
     {
@@ -421,7 +434,9 @@ static void PrintStartupReport( bool kernelFrames, bool hwStats, int hwErrno, co
         printf( "  output:                        %s\n", output );
     }
 #ifdef TRACY_ON_DEMAND
-    printf( "  recording:                     on-demand: samples are captured only while a Tracy server is connected; pre-connection samples are discarded\n" );
+    printf( "  recording:                     on-demand (samples are captured only while a Tracy server is connected; pre-connection samples are discarded)\n" );
+#else
+    printf( "  recording:                     continuous\n" );
 #endif
     printf( "\n" );
     if( !output )
@@ -586,8 +601,21 @@ static bool VerifyClientListening()
     }
     return false;
 }
+// Exit when the profiler that started us dies. An attached target is never signalled.
+static bool ArmParentDeathSignal()
+{
+    if( !s_exitWithParent ) return true;
+    const pid_t parent = getppid();
+    prctl( PR_SET_PDEATHSIG, SIGINT );
+    if( getppid() == parent ) return true;
+    fprintf( stderr, "The parent process has already exited.\n" );
+    return false;
+}
+
 static int RunAttached( pid_t pid, const char* output )
 {
+    if( !ArmParentDeathSignal() ) return 1;
+
     if( kill( pid, 0 ) != 0 )
     {
         fprintf( stderr, "Process %d does not exist or is not accessible.\n", (int)pid );
@@ -688,6 +716,8 @@ static int RunAttached( pid_t pid, const char* output )
 
 static int RunForked( int argc, char** argv, const char* output )
 {
+    if( !ArmParentDeathSignal() ) return 1;
+
     pid_t childPid = fork();
     if( childPid < 0 )
     {
@@ -937,6 +967,8 @@ static void PrintUsage( const char* progName )
     printf( "                     several processes match, their PIDs are listed; use -p.\n" );
     printf( "  --hz N             Sampling frequency in Hz (default 10000, range 1..1000000)\n" );
     printf( "  --port N           Listen port for Tracy servers (default 8086)\n" );
+    printf( "  --exit-with-parent Also exit when the parent process (the\n" );
+    printf( "                     profiler that started the monitor) exits\n" );
     printf( "  -o, --output FILE  Save the trace to FILE (.tracy) when the capture\n" );
     printf( "                     ends. While capturing, the monitor acts as the Tracy\n" );
     printf( "                     server itself, so the profiler GUI cannot connect\n" );
@@ -1108,7 +1140,7 @@ int main( int argc, char** argv )
     const char* output = nullptr;
     bool overwrite = false;
 
-    enum { OptHz = 256, OptPort };
+    enum { OptHz = 256, OptPort, OptExitWithParent };
 
     static struct option longOptions[] =
     {
@@ -1116,6 +1148,7 @@ int main( int argc, char** argv )
         { "name",   required_argument, nullptr, 'n' },
         { "hz",     required_argument, nullptr, OptHz },
         { "port",   required_argument, nullptr, OptPort },
+        { "exit-with-parent", no_argument, nullptr, OptExitWithParent },
         { "output", required_argument, nullptr, 'o' },
         { "force",  no_argument,       nullptr, 'f' },
         { "help",   no_argument,       nullptr, 'h' },
@@ -1153,6 +1186,9 @@ int main( int argc, char** argv )
             setenv( "TRACY_SAMPLING_HZ", buf, 1 );
             break;
         }
+        case OptExitWithParent:
+            s_exitWithParent = true;
+            break;
         case OptPort:
         {
             const int port = atoi( optarg );

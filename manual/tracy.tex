@@ -3381,6 +3381,14 @@ The following options are also available:
 
 After starting, the monitor prints a short report listing the data sources that are actually active in your environment (sampling rate, kernel frames, context switches, hardware sampling statistics, power, vsync), together with the reason for any that are unavailable.
 
+The monitor does not need administrator rights to profile your own processes, but some data sources require capabilities. Instead of running it as root, you can grant them to its executable:
+
+\begin{lstlisting}[language=sh]
+sudo setcap cap_perfmon,cap_sys_ptrace,cap_dac_read_search+ep /path/to/tracy-monitor
+\end{lstlisting}
+
+\texttt{cap\_perfmon} allows kernel frames in callchains, \texttt{cap\_sys\_ptrace} allows reading the target process, and \texttt{cap\_dac\_read\_search} allows reading the tracepoint identifiers that context switch and vsync capture need. The grant is lost when the executable is rebuilt. Only grant it to a binary you trust.
+
 The monitor can also be built with the \texttt{TRACY\_ON\_DEMAND} define (section~\ref{ondemand}): in that case, samples are captured only while a Tracy server is connected, and samples taken before the first connection are discarded.
 
 \subsection{Merging trace files}
