@@ -66,6 +66,8 @@
 #include "zigzag32.hpp"
 
 #include "Backend.hpp"
+#include "profiler/TracyAttach.hpp"
+#include "profiler/TracyAttachUI.hpp"
 #include "EmscriptenShim.hpp"
 #include "Filters.hpp"
 #include "Fonts.hpp"
@@ -703,6 +705,11 @@ static void DrawContents()
     UpdateBroadcastClients();
 #endif
 
+    // Before the idle check below: an idle UI must still see the monitor exit.
+    tracy::PollAttach( [] ( const char* addr, uint16_t port ) {
+        view.store( std::make_shared<tracy::View>( RunOnMainThread, addr, port, SetWindowTitleCallback, SetupScaleCallback, AttentionCallback, TraceSavedCallback, s_achievements ), std::memory_order_release );
+    }, view.load( std::memory_order_acquire ) != nullptr );
+
     int display_w, display_h;
     bptr->NewFrame( display_w, display_h );
 
@@ -931,6 +938,15 @@ static void DrawContents()
             ImGui::EndPopup();
         }
         ImGui::Spacing();
+        {
+            // Centred in the window, so a wider window (the Monitor tab) keeps the row balanced.
+            const ImGuiStyle& style = ImGui::GetStyle();
+            const char* const labels[] = { ICON_FA_BOOK " Manual", ICON_FA_EARTH_AMERICAS " Web", ICON_FA_COMMENTS " Chat", ICON_FA_HEART " Sponsor" };
+            float rowWidth = -style.ItemSpacing.x;
+            for( const char* label : labels ) rowWidth += ImGui::CalcTextSize( label ).x + style.FramePadding.x * 2 + style.ItemSpacing.x;
+            const float offset = ( ImGui::GetContentRegionAvail().x - rowWidth ) * 0.5f;
+            if( offset > 0 ) ImGui::SetCursorPosX( ImGui::GetCursorPosX() + offset );
+        }
         if( ImGui::Button( ICON_FA_BOOK " Manual" ) )
         {
             tracy::GetManualWindow().Show() = true;
@@ -1113,6 +1129,22 @@ static void DrawContents()
                 }
 
                 ImGui::EndTabItem();
+            }
+            {
+                static bool monitorAvailable = tracy::MonitorAvailable();
+                ImGui::BeginDisabled( !monitorAvailable );
+                if( ImGui::BeginTabItem( "Monitor" ) )
+                {
+                    tracy::DrawAttachEntry( *hist );
+                    ImGui::EndTabItem();
+                }
+                ImGui::EndDisabled();
+                if( !monitorAvailable && ImGui::IsItemHovered( ImGuiHoveredFlags_AllowWhenDisabled ) )
+                {
+                    ImGui::SetTooltip( "tracy-monitor not found: put it next to the profiler or in PATH" );
+                    // Clicking the disabled tab rechecks, so installing the monitor needs no restart.
+                    if( ImGui::IsMouseClicked( ImGuiMouseButton_Left ) ) monitorAvailable = tracy::MonitorAvailable();
+                }
             }
 #ifndef TRACY_NO_FILESELECTOR
             if( ImGui::BeginTabItem( "Saved traces" ) )

@@ -3381,6 +3381,14 @@ The following options are also available:
 
 After starting, the monitor prints a short report listing the data sources that are actually active in your environment (sampling rate, kernel frames, context switches, hardware sampling statistics, power, vsync), together with the reason for any that are unavailable.
 
+The monitor needs no administrator rights when it runs as your own user, but some data sources need capabilities. Rather than running the monitor as root, you can grant the capabilities to its executable only:
+
+\begin{lstlisting}[language=sh]
+sudo setcap cap_perfmon,cap_sys_ptrace,cap_dac_read_search+ep /path/to/tracy-monitor
+\end{lstlisting}
+
+\texttt{cap\_perfmon} allows kernel frames in callchains, \texttt{cap\_sys\_ptrace} allows reading the target process, and \texttt{cap\_dac\_read\_search} allows reading the tracepoint identifiers that context switch and vsync capture need. The grant is lost whenever the executable is rebuilt, so repeat the command after each build. Only grant it to a binary you trust, since it lets that binary read data it could not otherwise access.
+
 The monitor can also be built with the \texttt{TRACY\_ON\_DEMAND} define (section~\ref{ondemand}): in that case, samples are captured only while a Tracy server is connected, and samples taken before the first connection are discarded.
 
 \subsection{Merging trace files}
@@ -3437,6 +3445,8 @@ If you want to open a trace that you have stored on the disk, you can do so in t
 
 The \emph{discovered clients} list is only displayed if clients are broadcasting their presence on the local network\footnote{Only on IPv4 network and only within the broadcast domain.}. Each entry shows the client's address\footnote{Either as an IP address or as a hostname, if able to resolve.} (and port, if different from the default one), how long the client has been running, and the name of the profiled application. Clicking on an entry will connect to the client. Incompatible clients are grayed out and can't be connected to, but Tracy will suggest a compatible version, if able. Clicking on the \emph{\faFilter{}~Filter} toggle button will display client filtering input fields, allowing removal of the displayed entries according to their address, port number, or program name. If filters are active, a yellow \faTriangleExclamation{}~warning icon will be displayed.
 
+On Linux, the \emph{Monitor} tab attaches the profiler to a process running on the same machine, without any changes to that process, using the \texttt{tracy-monitor} utility (section~\ref{externalmonitoring}). The utility must be located next to the profiler or in \texttt{PATH}. Select \emph{Running process} and pick an entry from the process list (the filter field narrows the list, and the refresh button reads it again), or select \emph{Launch new} to start a program together with its arguments. The \emph{Hz} field sets the sampling rate. Pressing \emph{Attach} (or \emph{Launch}) starts the session; the status area shows which data sources are active, and the log below it shows the output of the monitor. Pressing \emph{Stop} ends the session. The filter text and the most recently attached processes are remembered.
+
 \begin{figure}[h]
 \centering\begin{tikzpicture}
 \draw (0, 0.8) rectangle (4.95, -3.6);
@@ -3452,6 +3462,7 @@ The \emph{discovered clients} list is only displayed if clients are broadcasting
 
 \draw (0.1, -0.75) rectangle+(1.35, -0.35) node [midway] {\scriptsize By address};
 \draw (1.55, -0.75) rectangle+(1.65, -0.35) node [midway] {\scriptsize Saved traces};
+\draw (3.3, -0.75) rectangle+(1.15, -0.35) node [midway] {\scriptsize Monitor};
 
 \draw (0.1, -1.3) rectangle+(4.1, -0.5) node [midway] {Address entry};
 \draw[rounded corners=5pt] (4.33, -1.3) rectangle+(0.5, -0.5) node [midway] {\faCaretDown};
