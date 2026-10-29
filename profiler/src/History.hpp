@@ -7,6 +7,13 @@
 #include <unordered_map>
 #include <vector>
 
+struct AttachHistoryEntry
+{
+    int pid;
+    std::string exe;
+    std::string cmdline;
+};
+
 // Persisted "recently used" lists, stored together in a single history.json
 // in the profiler's save directory.
 class History
@@ -25,6 +32,14 @@ public:
     const std::vector<std::string>& RecentTraces() const { return m_recentTraces; }
     void RecordTrace( const char* path );
 
+    // Attached processes, most recent first.
+    const std::vector<AttachHistoryEntry>& Attached() const { return m_attached; }
+    void RecordAttach( const AttachHistoryEntry& entry );
+
+    // Text of the process filter of the Monitor tab.
+    const std::string& AttachFilter() const { return m_attachFilter; }
+    void SetAttachFilter( const std::string& filter ) { m_attachFilter = filter; }
+
 private:
     void Load();
     void Save() const;
@@ -35,6 +50,8 @@ private:
     std::unordered_map<std::string, uint64_t> m_connectionsMap;
     std::vector<std::unordered_map<std::string, uint64_t>::const_iterator> m_connectionsVec;
     std::vector<std::string> m_recentTraces;
+    std::vector<AttachHistoryEntry> m_attached;
+    std::string m_attachFilter;
 };
 
 #endif

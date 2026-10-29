@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <assert.h>
 #include <filesystem>
+#include <limits.h>
 #include <stdio.h>
 
 #include <nlohmann/json.hpp>
@@ -11,6 +12,7 @@
 #include "profiler/TracyStorage.hpp"
 
 static constexpr size_t RecentTracesMax = 10;
+static constexpr size_t AttachHistoryMax = 10;
 
 History::History()
     : m_fn( tracy::GetSavePath( "history.json" ) )
@@ -58,6 +60,24 @@ void History::Load()
                 if( m_recentTraces.size() == RecentTracesMax ) break;
             }
         }
+
+        if( json.contains( "attached" ) && json["attached"].is_array() )
+        {
+            for( auto& v : json["attached"] )
+            {
+                if( !v.is_object() || !v.contains( "pid" ) || !v["pid"].is_number_integer() ) continue;
+                if( !v.contains( "exe" ) || !v["exe"].is_string() || !v.contains( "cmdline" ) || !v["cmdline"].is_string() ) continue;
+                const auto pid = v["pid"].get<int64_t>();
+                if( pid < 0 || pid > INT_MAX ) continue;
+                auto exe = v["exe"].get<std::string>();
+                auto cmdline = v["cmdline"].get<std::string>();
+                if( exe.find( '\0' ) != std::string::npos || cmdline.find( '\0' ) != std::string::npos ) continue;
+                m_attached.push_back( { int( pid ), std::move( exe ), std::move( cmdline ) } );
+                if( m_attached.size() == AttachHistoryMax ) break;
+            }
+        }
+
+        if( json.contains( "attachFilter" ) && json["attachFilter"].is_string() ) m_attachFilter = json["attachFilter"].get<std::string>();
     }
     catch( nlohmann::json::exception& )
     {
@@ -72,8 +92,10 @@ void History::Save() const
 {
     auto connections = nlohmann::json::array();
     for( const auto& c : m_connectionsVec ) connections.push_back( { { "address", c->first }, { "count", c->second } } );
+    auto attached = nlohmann::json::array();
+    for( const auto& a : m_attached ) attached.push_back( { { "pid", a.pid }, { "exe", a.exe }, { "cmdline", a.cmdline } } );
 
-    const nlohmann::json j = { { "connections", connections }, { "recentTraces", m_recentTraces } };
+    const nlohmann::json j = { { "connections", connections }, { "recentTraces", m_recentTraces }, { "attached", attached }, { "attachFilter", m_attachFilter } };
     const auto data = j.dump( 2, ' ', false, nlohmann::json::error_handler_t::replace );
 
     FILE* f = fopen( m_fn.c_str(), "wb" );
@@ -123,4 +145,14 @@ void History::RecordTrace( const char* path )
     m_recentTraces.erase( std::remove( m_recentTraces.begin(), m_recentTraces.end(), abs ), m_recentTraces.end() );
     m_recentTraces.insert( m_recentTraces.begin(), std::move( abs ) );
     if( m_recentTraces.size() > RecentTracesMax ) m_recentTraces.resize( RecentTracesMax );
+}
+
+void History::RecordAttach( const AttachHistoryEntry& entry )
+{
+    m_attached.erase( std::remove_if( m_attached.begin(), m_attached.end(), [&]( const AttachHistoryEntry& e ) {
+        // The pid changes on every run, so the program identifies an entry.
+        return entry.exe.empty() ? e.exe.empty() && e.pid == entry.pid : e.exe == entry.exe;
+    } ), m_attached.end() );
+    m_attached.insert( m_attached.begin(), entry );
+    if( m_attached.size() > AttachHistoryMax ) m_attached.resize( AttachHistoryMax );
 }

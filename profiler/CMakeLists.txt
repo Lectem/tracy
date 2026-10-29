@@ -81,6 +81,8 @@ endfunction()
 set(SERVER_FILES
     TracyAchievementData.cpp
     TracyAchievements.cpp
+    TracyAttach.cpp
+    TracyAttachUI.cpp
     TracyBadVersion.cpp
     TracyColor.cpp
     TracyConfig.cpp
