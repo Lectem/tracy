@@ -15,6 +15,11 @@ namespace tracy
 void InitWinSock();
 #endif
 
+#ifdef TRACY_WEBSOCKET_SUPPORT
+// Origin header allowlist check. See TRACY_WEBSOCKET_ORIGINS.
+bool WebSocketOriginAllowed( const char* origin, size_t len, const char* allowList );
+#endif
+
 class Socket
 {
 public:
