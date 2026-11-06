@@ -210,6 +210,203 @@ bool WebSocketOriginAllowed( const char* origin, size_t len, const char* allowLi
     return false;
 }
 
+static void WsSha1( const uint8_t* data, size_t len, uint8_t out[20] )
+{
+    TRACY_ASSERT( len <= 119 );
+    uint8_t msg[128] = {};
+    memcpy( msg, data, len );
+    msg[len] = 0x80;
+    const size_t blocks = len + 9 <= 64 ? 1 : 2;
+    const uint64_t bits = uint64_t( len ) * 8;
+    for( int i=0; i<8; i++ ) msg[blocks*64 - 1 - i] = uint8_t( bits >> ( 8 * i ) );
+
+    uint32_t h[5] = { 0x67452301, 0xEFCDAB89, 0x98BADCFE, 0x10325476, 0xC3D2E1F0 };
+    for( size_t b=0; b<blocks; b++ )
+    {
+        uint32_t w[80];
+        for( int i=0; i<16; i++ )
+        {
+            const auto m = msg + b*64 + i*4;
+            w[i] = ( uint32_t( m[0] ) << 24 ) | ( uint32_t( m[1] ) << 16 ) | ( uint32_t( m[2] ) << 8 ) | m[3];
+        }
+        for( int i=16; i<80; i++ )
+        {
+            const uint32_t x = w[i-3] ^ w[i-8] ^ w[i-14] ^ w[i-16];
+            w[i] = ( x << 1 ) | ( x >> 31 );
+        }
+        uint32_t a = h[0], bb = h[1], c = h[2], d = h[3], e = h[4];
+        for( int i=0; i<80; i++ )
+        {
+            uint32_t f, k;
+            if( i < 20 )      { f = ( bb & c ) | ( ~bb & d );            k = 0x5A827999; }
+            else if( i < 40 ) { f = bb ^ c ^ d;                          k = 0x6ED9EBA1; }
+            else if( i < 60 ) { f = ( bb & c ) | ( bb & d ) | ( c & d ); k = 0x8F1BBCDC; }
+            else              { f = bb ^ c ^ d;                          k = 0xCA62C1D6; }
+            const uint32_t t = ( ( a << 5 ) | ( a >> 27 ) ) + f + e + k + w[i];
+            e = d;
+            d = c;
+            c = ( bb << 30 ) | ( bb >> 2 );
+            bb = a;
+            a = t;
+        }
+        h[0] += a; h[1] += bb; h[2] += c; h[3] += d; h[4] += e;
+    }
+    for( int i=0; i<5; i++ )
+    {
+        out[i*4+0] = uint8_t( h[i] >> 24 );
+        out[i*4+1] = uint8_t( h[i] >> 16 );
+        out[i*4+2] = uint8_t( h[i] >> 8 );
+        out[i*4+3] = uint8_t( h[i] );
+    }
+}
+
+// 20 bytes in, 28 characters + NUL out.
+static void WsBase64Sha1( const uint8_t* in, char* out )
+{
+    static const char tbl[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    int o = 0;
+    for( int i=0; i<18; i+=3 )
+    {
+        const uint32_t v = ( uint32_t( in[i] ) << 16 ) | ( uint32_t( in[i+1] ) << 8 ) | in[i+2];
+        out[o++] = tbl[( v >> 18 ) & 63];
+        out[o++] = tbl[( v >> 12 ) & 63];
+        out[o++] = tbl[( v >> 6 ) & 63];
+        out[o++] = tbl[v & 63];
+    }
+    const uint32_t v = ( uint32_t( in[18] ) << 16 ) | ( uint32_t( in[19] ) << 8 );
+    out[o++] = tbl[( v >> 18 ) & 63];
+    out[o++] = tbl[( v >> 12 ) & 63];
+    out[o++] = tbl[( v >> 6 ) & 63];
+    out[o++] = '=';
+    out[o] = 0;
+}
+
+// Finds a header value in an HTTP request. Name is lowercase.
+static bool WsFindHeader( const char* req, size_t reqLen, const char* name, const char*& val, size_t& valLen )
+{
+    const auto nameLen = strlen( name );
+    const auto end = req + reqLen;
+    auto p = (const char*)memchr( req, '\n', reqLen );     // skip the request line
+    while( p && p + 1 < end )
+    {
+        p++;
+        auto eol = (const char*)memchr( p, '\n', end - p );
+        if( !eol ) break;
+        auto lineEnd = eol;
+        if( lineEnd > p && lineEnd[-1] == '\r' ) lineEnd--;
+        if( lineEnd == p ) break;
+        if( size_t( lineEnd - p ) > nameLen && p[nameLen] == ':' && WsIEq( p, name, nameLen ) )
+        {
+            auto v = p + nameLen + 1;
+            while( v < lineEnd && ( *v == ' ' || *v == '\t' ) ) v++;
+            auto ve = lineEnd;
+            while( ve > v && ( ve[-1] == ' ' || ve[-1] == '\t' ) ) ve--;
+            val = v;
+            valLen = ve - v;
+            return true;
+        }
+        p = eol;
+    }
+    return false;
+}
+
+// Case insensitive token search in a comma separated header value.
+static bool WsHasToken( const char* val, size_t len, const char* token )
+{
+    const auto tl = strlen( token );
+    size_t i = 0;
+    while( i < len )
+    {
+        while( i < len && ( val[i] == ',' || val[i] == ' ' || val[i] == '\t' ) ) i++;
+        const auto start = i;
+        while( i < len && val[i] != ',' && val[i] != ' ' && val[i] != '\t' ) i++;
+        if( i - start == tl && WsIEq( val + start, token, tl ) ) return true;
+    }
+    return false;
+}
+
+bool Socket::WsHandshake( int timeout )
+{
+    const auto sock = m_sock.load( std::memory_order_relaxed );
+    char req[8192];
+    size_t len = 0;
+    size_t hdrEnd = 0;
+    for( int left=timeout; left>0 && !hdrEnd; left-=100 )
+    {
+        struct pollfd fd;
+        fd.fd = (socket_t)sock;
+        fd.events = POLLIN;
+        if( poll( &fd, 1, 100 ) <= 0 ) continue;
+        const auto r = recv( sock, req + len, sizeof( req ) - len, 0 );
+        if( r <= 0 ) return false;
+        len += r;
+        for( size_t j=0; j+3<len; j++ )
+        {
+            if( memcmp( req + j, "\r\n\r\n", 4 ) == 0 )
+            {
+                hdrEnd = j + 4;
+                break;
+            }
+        }
+        if( !hdrEnd && len == sizeof( req ) ) break;
+    }
+
+    static const char bad[] = "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+    static const char forbidden[] = "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+    if( !hdrEnd )
+    {
+        SendRaw( bad, sizeof( bad ) - 1 );
+        return false;
+    }
+
+    const char* val;
+    size_t valLen;
+    if( !WsFindHeader( req, hdrEnd, "upgrade", val, valLen ) || !WsHasToken( val, valLen, "websocket" ) ||
+        !WsFindHeader( req, hdrEnd, "connection", val, valLen ) || !WsHasToken( val, valLen, "upgrade" ) ||
+        !WsFindHeader( req, hdrEnd, "sec-websocket-version", val, valLen ) || valLen != 2 || memcmp( val, "13", 2 ) != 0 )
+    {
+        SendRaw( bad, sizeof( bad ) - 1 );
+        return false;
+    }
+
+    if( WsFindHeader( req, hdrEnd, "origin", val, valLen ) )
+    {
+#ifdef TRACY_WEBSOCKET_ORIGINS
+        const char* def = TRACY_WEBSOCKET_ORIGINS;
+#else
+        const char* def = "";
+#endif
+        const char* env = GetEnvVar( "TRACY_WEBSOCKET_ORIGINS" );
+        if( !WebSocketOriginAllowed( val, valLen, def ) && !( env && WebSocketOriginAllowed( val, valLen, env ) ) )
+        {
+            SendRaw( forbidden, sizeof( forbidden ) - 1 );
+            return false;
+        }
+    }
+
+    if( !WsFindHeader( req, hdrEnd, "sec-websocket-key", val, valLen ) || valLen != 24 )
+    {
+        SendRaw( bad, sizeof( bad ) - 1 );
+        return false;
+    }
+    uint8_t keyGuid[60];
+    memcpy( keyGuid, val, 24 );
+    memcpy( keyGuid + 24, "258EAFA5-E914-47DA-95CA-C5AB0DC85B11", 36 );
+    uint8_t digest[20];
+    WsSha1( keyGuid, sizeof( keyGuid ), digest );
+    char accept[32];
+    WsBase64Sha1( digest, accept );
+
+    bool binary = false;
+    if( WsFindHeader( req, hdrEnd, "sec-websocket-protocol", val, valLen ) ) binary = WsHasToken( val, valLen, "binary" );
+
+    char resp[256];
+    const auto rl = snprintf( resp, sizeof( resp ),
+        "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n%s\r\n",
+        accept, binary ? "Sec-WebSocket-Protocol: binary\r\n" : "" );
+    return SendRaw( resp, rl ) != -1;
+}
+
 }
 
 #endif
