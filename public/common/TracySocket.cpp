@@ -248,7 +248,12 @@ void Socket::Close()
     m_sock.store( -1, std::memory_order_relaxed );
 }
 
-int Socket::Send( const void* _buf, int len )
+int Socket::Send( const void* buf, int len )
+{
+    return SendRaw( buf, len );
+}
+
+int Socket::SendRaw( const void* _buf, int len )
 {
     const auto sock = m_sock.load( std::memory_order_relaxed );
     auto buf = (const char*)_buf;
@@ -314,7 +319,12 @@ int Socket::RecvBuffered( void* buf, int len, int timeout )
     return sz;
 }
 
-int Socket::Recv( void* _buf, int len, int timeout )
+int Socket::Recv( void* buf, int len, int timeout )
+{
+    return RecvRaw( buf, len, timeout );
+}
+
+int Socket::RecvRaw( void* _buf, int len, int timeout )
 {
     const auto sock = m_sock.load( std::memory_order_relaxed );
     auto buf = (char*)_buf;

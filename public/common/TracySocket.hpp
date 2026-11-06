@@ -80,6 +80,8 @@ public:
 private:
     int RecvBuffered( void* buf, int len, int timeout );
     int Recv( void* buf, int len, int timeout );
+    int RecvRaw( void* buf, int len, int timeout );
+    int SendRaw( const void* buf, int len );
 
     bool ReadImpl( char*& buf, int& len, int timeout );
 
