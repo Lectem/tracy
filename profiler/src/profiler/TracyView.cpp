@@ -751,6 +751,15 @@ bool View::DrawImpl()
         ImGui::PopFont();
         ImGui::TextUnformatted( "Waiting for connection…" );
         DrawWaitingDotsCentered( s_time );
+#ifdef __EMSCRIPTEN__
+        // The browser doesn't tell why a WebSocket connection failed, so only hint at the usual cause.
+        m_noAnswerTime += ImGui::GetIO().DeltaTime;
+        if( m_noAnswerTime > 5.f )
+        {
+            ImGui::Spacing();
+            ImGui::TextUnformatted( "No answer. Is the client running, and built with TRACY_WEBSOCKET_SUPPORT?" );
+        }
+#endif
         ImGui::End();
         return keepOpen;
     }

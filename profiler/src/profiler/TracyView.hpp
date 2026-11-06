@@ -636,6 +636,9 @@ private:
     Annotation* m_selectedAnnotation = nullptr;
     bool m_reactToCrash = false;
     bool m_reactToLostConnection = false;
+#ifdef __EMSCRIPTEN__
+    float m_noAnswerTime = 0;
+#endif
 
     ImGuiTextFilter m_statisticsFilter;
     ImGuiTextFilter m_statisticsImageFilter;
