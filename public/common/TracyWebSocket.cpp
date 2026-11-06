@@ -629,6 +629,17 @@ int Socket::WsSend( const void* buf, int len )
     return SendRaw( buf, len );
 }
 
+int Socket::SendFramed( void* buf, int len )
+{
+    auto data = (char*)buf + WebSocketMaxHeaderSize;
+    if( m_wsState != WsActive ) return SendRaw( data, len );
+    uint8_t hdr[WebSocketMaxHeaderSize];
+    const auto hl = WsMakeHeader( hdr, len );
+    auto start = data - hl;
+    memcpy( start, hdr, hl );
+    return SendRaw( start, hl + len ) == -1 ? -1 : len;
+}
+
 }
 
 #endif

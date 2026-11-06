@@ -16,7 +16,7 @@ void InitWinSock();
 #endif
 
 #ifdef TRACY_WEBSOCKET_SUPPORT
-// Headroom needed before a buffer passed to Socket::SendFramed.
+// Room at the start of a buffer passed to Socket::SendFramed, for the header of the frame.
 // A frame sent by the server is not masked: 2 bytes, plus 8 for a 64-bit length.
 constexpr int WebSocketMaxHeaderSize = 10;
 // Origin header allowlist check. See TRACY_WEBSOCKET_ORIGINS.
@@ -35,6 +35,10 @@ public:
     void Close();
 
     int Send( const void* buf, int len );
+#ifdef TRACY_WEBSOCKET_SUPPORT
+    // buf has WebSocketMaxHeaderSize bytes of room, followed by len bytes of data.
+    int SendFramed( void* buf, int len );
+#endif
     int GetSendBufSize();
 
     int ReadUpTo( void* buf, int len );
