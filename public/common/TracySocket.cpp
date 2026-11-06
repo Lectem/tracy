@@ -102,6 +102,9 @@ Socket::Socket( int sock )
     , m_sock( sock )
     , m_bufLeft( 0 )
     , m_ptr( nullptr )
+#ifdef TRACY_WEBSOCKET_SUPPORT
+    , m_wsState( WsDetect )
+#endif
 {
 }
 
@@ -250,6 +253,10 @@ void Socket::Close()
 
 int Socket::Send( const void* buf, int len )
 {
+#ifdef TRACY_WEBSOCKET_SUPPORT
+    TRACY_ASSERT( m_wsState != WsDetect );
+    if( m_wsState == WsActive ) return WsSend( buf, len );
+#endif
     return SendRaw( buf, len );
 }
 
@@ -321,6 +328,14 @@ int Socket::RecvBuffered( void* buf, int len, int timeout )
 
 int Socket::Recv( void* buf, int len, int timeout )
 {
+#ifdef TRACY_WEBSOCKET_SUPPORT
+    if( m_wsState == WsDetect )
+    {
+        const auto r = WsDetectProtocol( timeout );
+        if( r <= 0 ) return r;
+    }
+    if( m_wsState == WsActive ) return WsRecv( buf, len, timeout );
+#endif
     return RecvRaw( buf, len, timeout );
 }
 
@@ -415,6 +430,11 @@ bool Socket::HasData()
     struct pollfd fd;
     fd.fd = (socket_t)sock;
     fd.events = POLLIN;
+
+#ifdef TRACY_WEBSOCKET_SUPPORT
+    TRACY_ASSERT( m_wsState != WsDetect );
+    if( m_wsState == WsActive ) return WsHasData();
+#endif
 
     return poll( &fd, 1, 0 ) > 0;
 }

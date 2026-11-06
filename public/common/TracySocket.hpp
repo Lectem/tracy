@@ -16,6 +16,9 @@ void InitWinSock();
 #endif
 
 #ifdef TRACY_WEBSOCKET_SUPPORT
+// Headroom needed before a buffer passed to Socket::SendFramed.
+// A frame sent by the server is not masked: 2 bytes, plus 8 for a 64-bit length.
+constexpr int WebSocketMaxHeaderSize = 10;
 // Origin header allowlist check. See TRACY_WEBSOCKET_ORIGINS.
 bool WebSocketOriginAllowed( const char* origin, size_t len, const char* allowList );
 #endif
@@ -24,6 +27,7 @@ class Socket
 {
 public:
     Socket();
+    // A socket accepted by ListenSocket. A WebSocket client is detected on the first read.
     Socket( int sock );
     ~Socket();
 
@@ -84,7 +88,33 @@ private:
     int SendRaw( const void* buf, int len );
 
 #ifdef TRACY_WEBSOCKET_SUPPORT
+    enum WsState { WsRaw, WsDetect, WsActive };
+
+    // The WebSocket frame being read.
+    struct WsFrame
+    {
+        // True once the header is read, until the whole payload is.
+        bool hdrDone = false;
+        uint8_t hdrLen = 0;
+        uint8_t opcode = 0;
+        uint8_t maskOff = 0;
+        uint8_t ctlLen = 0;
+        uint8_t hdr[14];
+        uint8_t mask[4];
+        uint8_t ctl[125];
+        uint64_t remain = 0;
+
+        // A data frame with payload left to read.
+        bool Pending() const { return hdrDone && opcode < 8 && remain > 0; }
+    };
+
+    int WsDetectProtocol( int timeout );
     bool WsHandshake( int timeout );
+    int WsRecv( void* buf, int len, int timeout );
+    int WsFrameStep( int timeout );
+    bool WsHasData();
+    int WsSend( const void* buf, int len );
+    void WsSendControl( uint8_t opcode, const uint8_t* data, int len );
 #endif
 
     bool ReadImpl( char*& buf, int& len, int timeout );
@@ -97,6 +127,11 @@ private:
     struct addrinfo *m_res;
     struct addrinfo *m_ptr;
     int m_connSock;
+
+#ifdef TRACY_WEBSOCKET_SUPPORT
+    WsState m_wsState = WsRaw;
+    WsFrame m_wsFrame;
+#endif
 };
 
 class ListenSocket

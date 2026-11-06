@@ -1,9 +1,11 @@
 #ifdef TRACY_WEBSOCKET_SUPPORT
 
+#include <chrono>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/types.h>
+#include <thread>
 
 #include "TracyAssert.hpp"
 #include "TracySocket.hpp"
@@ -325,22 +327,83 @@ static bool WsHasToken( const char* val, size_t len, const char* token )
     return false;
 }
 
+static int WsMakeHeader( uint8_t* h, uint64_t len )
+{
+    h[0] = 0x82;    // FIN, binary
+    if( len < 126 )
+    {
+        h[1] = uint8_t( len );
+        return 2;
+    }
+    if( len < 65536 )
+    {
+        h[1] = 126;
+        h[2] = uint8_t( len >> 8 );
+        h[3] = uint8_t( len );
+        return 4;
+    }
+    h[1] = 127;
+    for( int i=0; i<8; i++ ) h[2+i] = uint8_t( len >> ( 56 - 8 * i ) );
+    return 10;
+}
+
+int Socket::WsDetectProtocol( int timeout )
+{
+    const auto sock = m_sock.load( std::memory_order_relaxed );
+    struct pollfd fd;
+    fd.fd = (socket_t)sock;
+    fd.events = POLLIN;
+    const auto end = std::chrono::steady_clock::now() + std::chrono::milliseconds( timeout );
+    if( poll( &fd, 1, timeout ) <= 0 ) return -1;
+
+    // The first bytes can arrive in pieces. Peeking doesn't consume them, so wait until all four are there.
+    char p[4];
+    for(;;)
+    {
+        const auto n = recv( sock, p, 4, MSG_PEEK );
+        if( n == 0 ) return 0;
+        if( n < 0 ) return -1;
+        if( memcmp( p, "GET ", n ) != 0 )
+        {
+            m_wsState = WsRaw;
+            return 1;
+        }
+        if( n == 4 ) break;
+        if( std::chrono::steady_clock::now() >= end ) return -1;
+        std::this_thread::sleep_for( std::chrono::milliseconds( 1 ) );
+    }
+    if( !WsHandshake( timeout ) ) return 0;
+    m_wsState = WsActive;
+    return 1;
+}
+
 bool Socket::WsHandshake( int timeout )
 {
     const auto sock = m_sock.load( std::memory_order_relaxed );
-    char req[8192];
+    char req[16384];
     size_t len = 0;
     size_t hdrEnd = 0;
-    for( int left=timeout; left>0 && !hdrEnd; left-=100 )
+    const auto end = std::chrono::steady_clock::now() + std::chrono::milliseconds( timeout );
+    while( !hdrEnd && len < sizeof( req ) )
     {
+        auto left = std::chrono::duration_cast<std::chrono::milliseconds>( end - std::chrono::steady_clock::now() ).count();
+        if( left < 0 ) left = 0;
         struct pollfd fd;
         fd.fd = (socket_t)sock;
         fd.events = POLLIN;
-        if( poll( &fd, 1, 100 ) <= 0 ) continue;
+        const auto pr = poll( &fd, 1, (int)left );
+        if( pr == 0 ) break;
+        if( pr < 0 )
+        {
+            if( left == 0 ) break;
+            continue;
+        }
+        // The client waits for the response before it sends frames, so only the request is read here.
         const auto r = recv( sock, req + len, sizeof( req ) - len, 0 );
         if( r <= 0 ) return false;
+        const auto prev = len;
         len += r;
-        for( size_t j=0; j+3<len; j++ )
+        for( size_t j = prev > 3 ? prev - 3 : 0; j+3<len; j++ )
         {
             if( memcmp( req + j, "\r\n\r\n", 4 ) == 0 )
             {
@@ -348,14 +411,15 @@ bool Socket::WsHandshake( int timeout )
                 break;
             }
         }
-        if( !hdrEnd && len == sizeof( req ) ) break;
     }
 
     static const char bad[] = "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+    static const char tooLarge[] = "HTTP/1.1 431 Request Header Fields Too Large\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
     static const char forbidden[] = "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
     if( !hdrEnd )
     {
-        SendRaw( bad, sizeof( bad ) - 1 );
+        if( len == sizeof( req ) ) SendRaw( tooLarge, sizeof( tooLarge ) - 1 );
+        else SendRaw( bad, sizeof( bad ) - 1 );
         return false;
     }
 
@@ -405,6 +469,164 @@ bool Socket::WsHandshake( int timeout )
         "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n%s\r\n",
         accept, binary ? "Sec-WebSocket-Protocol: binary\r\n" : "" );
     return SendRaw( resp, rl ) != -1;
+}
+
+int Socket::WsRecv( void* _buf, int len, int timeout )
+{
+    auto& f = m_wsFrame;
+    auto buf = (uint8_t*)_buf;
+    for(;;)
+    {
+        if( f.Pending() )
+        {
+            const int n = f.remain < uint64_t( len ) ? int( f.remain ) : len;
+            const auto r = RecvRaw( buf, n, timeout );
+            if( r <= 0 ) return r;
+            for( int i=0; i<r; i++ ) buf[i] ^= f.mask[( f.maskOff + i ) & 3];
+            f.maskOff = uint8_t( f.maskOff + r );
+            f.remain -= r;
+            if( f.remain == 0 ) f.hdrDone = false;
+            return r;
+        }
+        const auto r = WsFrameStep( timeout );
+        if( r <= 0 ) return r;
+    }
+}
+
+// Reads a frame header, and the whole frame if it is a control frame.
+// Returns 1 on progress, 0 when the connection is closed or broken, -1 when no data is available yet.
+int Socket::WsFrameStep( int timeout )
+{
+    auto& f = m_wsFrame;
+    if( !f.hdrDone )
+    {
+        for(;;)
+        {
+            int need = 2;
+            if( f.hdrLen >= 2 )
+            {
+                const auto l7 = f.hdr[1] & 0x7f;
+                need += ( l7 == 126 ? 2 : l7 == 127 ? 8 : 0 ) + ( ( f.hdr[1] & 0x80 ) ? 4 : 0 );
+            }
+            if( f.hdrLen >= need ) break;
+            const auto r = RecvRaw( f.hdr + f.hdrLen, need - f.hdrLen, timeout );
+            if( r <= 0 ) return r;
+            f.hdrLen += r;
+        }
+
+        if( !( f.hdr[1] & 0x80 ) ) return 0;      // client frames must be masked
+        f.opcode = f.hdr[0] & 0x0f;
+        const auto l7 = f.hdr[1] & 0x7f;
+        uint64_t plen;
+        int off = 2;
+        if( l7 == 126 )
+        {
+            plen = ( uint64_t( f.hdr[2] ) << 8 ) | f.hdr[3];
+            off = 4;
+        }
+        else if( l7 == 127 )
+        {
+            plen = 0;
+            for( int i=0; i<8; i++ ) plen = ( plen << 8 ) | f.hdr[2+i];
+            off = 10;
+        }
+        else
+        {
+            plen = l7;
+        }
+        memcpy( f.mask, f.hdr + off, 4 );
+        f.maskOff = 0;
+        f.ctlLen = 0;
+        f.remain = plen;
+        const bool fin = ( f.hdr[0] & 0x80 ) != 0;
+        f.hdrLen = 0;
+
+        if( f.opcode >= 8 )
+        {
+            if( plen > 125 || !fin ) return 0;
+        }
+        else if( f.opcode > 2 )
+        {
+            return 0;
+        }
+        f.hdrDone = true;
+        if( f.opcode < 8 )
+        {
+            if( plen == 0 ) f.hdrDone = false;
+            return 1;
+        }
+    }
+
+    // Control frame payload.
+    while( f.remain > 0 )
+    {
+        const auto r = RecvRaw( f.ctl + f.ctlLen, int( f.remain ), timeout );
+        if( r <= 0 ) return r;
+        for( int i=0; i<r; i++ ) f.ctl[f.ctlLen+i] ^= f.mask[( f.maskOff + i ) & 3];
+        f.maskOff = uint8_t( f.maskOff + r );
+        f.ctlLen = uint8_t( f.ctlLen + r );
+        f.remain -= r;
+    }
+    f.hdrDone = false;
+    switch( f.opcode )
+    {
+    case 8:     // close
+        WsSendControl( 8, f.ctl, f.ctlLen >= 2 ? 2 : 0 );
+        return 0;
+    case 9:     // ping
+        WsSendControl( 10, f.ctl, f.ctlLen );
+        return 1;
+    case 10:    // pong
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+bool Socket::WsHasData()
+{
+    // A broken connection counts as having data, as with a plain socket, so that the next read reports it.
+    struct pollfd fd;
+    fd.fd = (socket_t)m_sock.load( std::memory_order_relaxed );
+    fd.events = POLLIN;
+    if( poll( &fd, 1, 0 ) > 0 && ( fd.revents & ( POLLERR | POLLHUP ) ) ) return true;
+
+    // Consume control frames, report only when payload data is pending (or the connection is gone).
+    // The number of frames is limited, or a peer sending nothing else would keep the caller from checking if it
+    // should exit. The rest is read on the next call.
+    for( int i=0; i<16; i++ )
+    {
+        if( m_wsFrame.Pending() ) return true;
+        const auto r = WsFrameStep( 0 );
+        if( r == 0 ) return true;
+        if( r < 0 ) return false;
+    }
+    return m_wsFrame.Pending();
+}
+
+// Called from the receive path. Only the profiler thread uses the socket, so this can't land between the parts of a send.
+void Socket::WsSendControl( uint8_t opcode, const uint8_t* data, int len )
+{
+    uint8_t frame[2+125];
+    frame[0] = 0x80 | opcode;
+    frame[1] = uint8_t( len );
+    memcpy( frame + 2, data, len );
+    SendRaw( frame, 2 + len );
+}
+
+int Socket::WsSend( const void* buf, int len )
+{
+    uint8_t hdr[WebSocketMaxHeaderSize];
+    const auto hl = WsMakeHeader( hdr, len );
+    if( len <= 1024 )
+    {
+        uint8_t tmp[WebSocketMaxHeaderSize + 1024];
+        memcpy( tmp, hdr, hl );
+        memcpy( tmp + hl, buf, len );
+        return SendRaw( tmp, hl + len ) == -1 ? -1 : len;
+    }
+    if( SendRaw( hdr, hl ) == -1 ) return -1;
+    return SendRaw( buf, len );
 }
 
 }
