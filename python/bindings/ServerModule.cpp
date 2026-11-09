@@ -471,6 +471,78 @@ PYBIND11_MODULE( TracyServerBindings, m )
         return result;
     } ), "callstack_idx"_a )
 
+        // --- apt-dpkg additions: per-thread samples / wait stacks with callstack idx ---
+        .def( "get_thread_samples_cs", locked( +[]( const Worker& w, uint64_t tid ) {
+        py::list result;
+        const auto* td = w.GetThreadData( tid );
+        if( !td ) return result;
+        for( const auto& s : td->samples ) result.append( py::make_tuple( s.time.Val(), (uint32_t)s.callstack.Val() ) );
+        return result;
+    } ), "tid"_a )
+        .def( "get_thread_wait_stacks", locked( +[]( const Worker& w, uint64_t tid ) {
+        py::list result;
+        const auto* td = w.GetThreadData( tid );
+        if( !td ) return result;
+        for( const auto& s : td->ctxSwitchSamples ) result.append( py::make_tuple( s.time.Val(), (uint32_t)s.callstack.Val() ) );
+        return result;
+    } ), "tid"_a )
+        .def( "get_thread_cs_full", locked( +[]( const Worker& w, uint64_t tid ) {
+        py::list result;
+        const auto* cs = const_cast<Worker&>( w ).GetContextSwitchData( tid );
+        if( !cs ) return result;
+        for( const auto& ev : cs->v )
+        {
+            if( !ev.IsEndValid() ) continue;
+            result.append( py::make_tuple( ev.WakeupVal(), ev.Start(), ev.End(), (int)ev.Reason(), (int)ev.State(), (int)ev.Cpu() ) );
+        }
+        return result;
+    } ), "tid"_a )
+        .def( "get_symbol_code_count", locked( +[]( const Worker& w ) { return w.GetSymbolCodeCount(); } ) )
+        .def( "has_symbol_code", locked( +[]( const Worker& w, uint64_t sym ) { return w.HasSymbolCode( sym ); } ), "sym"_a )
+        .def( "get_external_name", locked( +[]( const Worker& w, uint64_t tid ) {
+        auto n = w.GetExternalName( tid ); return py::make_tuple( std::string( n.first ? n.first : "" ), std::string( n.second ? n.second : "" ) );
+    } ), "tid"_a )
+        .def( "get_pid_from_tid", locked( +[]( const Worker& w, uint64_t tid ) { return w.GetPidFromTid( tid ); } ), "tid"_a )
+        .def( "get_cpu_time_by_tid", locked( +[]( const Worker& w, int64_t t0, int64_t t1 ) {
+        py::dict result;
+        std::unordered_map<uint64_t, int64_t> acc;
+        const auto* cpus = w.GetCpuData();
+        const int n = w.GetCpuDataCpuCount();
+        for( int c = 0; c < n; c++ )
+        {
+            for( const auto& ev : cpus[c].cs )
+            {
+                if( !ev.IsEndValid() ) continue;
+                const int64_t s = std::max( ev.Start(), t0 ), e = std::min( ev.End(), t1 );
+                if( e <= s ) continue;
+                acc[w.DecompressThreadExternal( ev.Thread() )] += e - s;
+            }
+        }
+        for( const auto& kv : acc ) result[py::int_( kv.first )] = kv.second;
+        return py::make_tuple( n, result );
+    } ), "t0"_a, "t1"_a )
+        // --- threads demo additions: Tracy 0.15 deadlock detection results ---
+        .def( "get_deadlocks", locked( +[]( const Worker& w ) {
+        py::list result;
+        const auto& groups = w.GetDeadlockGroups();
+        const auto& members = w.GetDeadlockMembers();
+        for( const auto& g : groups )
+        {
+            py::list mem;
+            for( uint32_t i=0; i<g.cnt; i++ )
+            {
+                const auto& m = members[g.first+i];
+                std::string name;
+                auto it = w.GetLockMap().find( m.lock );
+                if( it != w.GetLockMap().end() && it->second->customName.Active() ) name = w.GetString( it->second->customName );
+                py::dict d; d["thread"] = m.thread; d["holder"] = m.holder; d["lock"] = m.lock; d["lock_name"] = name; d["wait_time"] = m.waitTime;
+                mem.append( d );
+            }
+            py::dict gd; gd["time"] = g.time; gd["members"] = mem;
+            result.append( gd );
+        }
+        return result;
+    } ) )
         // --- Context switches per thread ---
         .def( "get_thread_context_switches", locked( +[]( const Worker& w, uint64_t tid, size_t maxSamples ) {
         py::list result;
