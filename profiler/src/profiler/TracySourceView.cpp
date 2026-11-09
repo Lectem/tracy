@@ -255,6 +255,7 @@ SourceView::SourceView()
     , m_hoveredLine( 0 )
     , m_hoveredSource( 0 )
     , m_codeLen( 0 )
+    , m_symLen( 0 )
     , m_highlightAddr( 0 )
     , m_asmCountBase( -1 )
     , m_asmRelative( true )
@@ -493,7 +494,7 @@ void SourceView::OpenSymbol( const char* fileName, int line, uint64_t baseAddr, 
 
     SelectViewMode();
 
-    if( !worker.GetInlineSymbolList( baseAddr, m_codeLen ) ) m_calcInlineStats = false;
+    if( !worker.GetInlineSymbolList( baseAddr, m_symLen ) ) m_calcInlineStats = false;
 
     if( updateHistory )
     {
@@ -550,6 +551,11 @@ bool SourceView::Disassemble( uint64_t symAddr, const Worker& worker )
     m_disasmFail = data.disasmFail;
     m_cpuArch = data.cpuArch;
     m_codeLen = data.codeLen;
+    // The symbol's address range. The machine code is requested with this size, so it matches m_codeLen when the
+    // code is available, but it is still known when it isn't (TRACY_NO_CODE_TRANSFER): the inline frames and the
+    // source line addresses come from the callstacks.
+    auto sym = worker.GetSymbolData( symAddr );
+    m_symLen = sym && sym->size.Val() != 0 ? sym->size.Val() : m_codeLen;
     m_maxLine = data.maxLine;
     m_maxMnemonicLen = data.maxMnemonicLen;
     m_maxOperandLen = data.maxOperandLen;
@@ -749,8 +755,8 @@ void SourceView::RenderSymbolView( Worker& worker, View& view, WindowConstraints
     ImGui::SameLine();
     ImGui::PopFont();
 
-    auto inlineList = worker.GetInlineSymbolList( m_baseAddr, m_codeLen );
-    const auto symEnd = m_baseAddr + m_codeLen;
+    auto inlineList = worker.GetInlineSymbolList( m_baseAddr, m_symLen );
+    const auto symEnd = m_baseAddr + m_symLen;
     if( inlineList )
     {
         auto it = inlineList;
@@ -815,6 +821,8 @@ void SourceView::RenderSymbolView( Worker& worker, View& view, WindowConstraints
         if( shortenName != ShortenName::Never ) currSymName = ShortenZoneName( ShortenName::OnlyNormalize, currSymName );
         if( ImGui::BeginCombo( "##functionList", currSymName, ImGuiComboFlags_HeightLarge ) )
         {
+            // Check each source file once per combo opening, not on every frame.
+            if( ImGui::IsWindowAppearing() ) m_sourceFileValid.clear();
             unordered_flat_map<uint64_t, uint32_t> symStat;
             if( limitView )
             {
@@ -926,7 +934,12 @@ void SourceView::RenderSymbolView( Worker& worker, View& view, WindowConstraints
                 ImGui::PushID( v.first );
                 const auto symName = v.first == m_baseAddr ? "[ - self - ]" : worker.GetString( isym->name );
                 const auto normalized = shortenName != ShortenName::Never ? ShortenZoneName( ShortenName::OnlyNormalize, symName ) : symName;
-                const auto selected = ImGui::Selectable( "", v.first == m_symAddr, ImGuiSelectableFlags_SpanAllColumns );
+                auto it = m_sourceFileValid.find( file );
+                if( it == m_sourceFileValid.end() ) it = m_sourceFileValid.emplace( file, SourceFileValid( file, worker.GetCaptureTime(), view, worker ) ).first;
+                const auto fileValid = it->second;
+                // Without machine code there is nothing to show for an inline whose source is not available.
+                const auto canSelect = !m_asm.empty() || fileValid;
+                const auto selected = ImGui::Selectable( "", v.first == m_symAddr, ImGuiSelectableFlags_SpanAllColumns | ( canSelect ? 0 : ImGuiSelectableFlags_Disabled ) );
                 ImGui::SameLine( 0, 0 );
                 if( worker.IsFrameExternal( isym->file, isym->imageName ) )
                 {
@@ -939,18 +952,27 @@ void SourceView::RenderSymbolView( Worker& worker, View& view, WindowConstraints
                 TooltipNormalizedName( symName, normalized );
                 if( selected )
                 {
-                    m_symAddr = v.first;
+                    const auto prevFile = m_source.filename();
                     ParseSource( file, worker, view );
-                    m_targetLine = line;
-                    SelectLine( line, &worker, true );
-                    SelectViewMode();
+                    if( m_source.empty() && m_asm.empty() )
+                    {
+                        // The file passed SourceFileValid() but could not be read: there would be nothing to display.
+                        ParseSource( prevFile, worker, view );
+                    }
+                    else
+                    {
+                        m_symAddr = v.first;
+                        m_targetLine = line;
+                        SelectLine( line, &worker, true );
+                        SelectViewMode();
+                    }
                 }
                 ImGui::PopID();
                 ImGui::SameLine();
                 ImGui::Spacing();
                 ImGui::SameLine();
                 ImGui::TextDisabled( "%s:%i", file, line );
-                if( ImGui::IsItemHovered() && SourceFileValid( file, worker.GetCaptureTime(), view, worker ) )
+                if( ImGui::IsItemHovered() && fileValid )
                 {
                     m_sourceTooltip.Parse( file, worker, view );
                     if( !m_sourceTooltip.empty() )
@@ -1004,10 +1026,10 @@ void SourceView::RenderSymbolView( Worker& worker, View& view, WindowConstraints
         else
         {
             GatherIpStats( m_baseAddr, as, worker, limitView, view, m_source.filename(), m_propagateInlines );
-            auto iptr = worker.GetInlineSymbolList( m_baseAddr, m_codeLen );
+            auto iptr = worker.GetInlineSymbolList( m_baseAddr, m_symLen );
             if( iptr )
             {
-                const auto symEnd = m_baseAddr + m_codeLen;
+                const auto symEnd = m_baseAddr + m_symLen;
                 while( *iptr < symEnd )
                 {
                     GatherIpStats( *iptr, as, worker, limitView, view, m_source.filename(), m_propagateInlines );
@@ -1831,7 +1853,7 @@ void SourceView::RenderSymbolSourceView( const AddrStatData& as, Worker& worker,
                 {
                     for( auto& addr : *addresses )
                     {
-                        if( addr >= m_baseAddr && addr < m_baseAddr + m_codeLen )
+                        if( addr >= m_baseAddr && addr < m_baseAddr + m_symLen )
                         {
                             ipData.emplace_back( lineNum, AddrStat {} );
                             break;
@@ -2094,10 +2116,10 @@ void SourceView::AttachRangeToLlm( size_t start, size_t stop, Worker& worker, Vi
     else
     {
         GatherIpStats( m_baseAddr, as, worker, limitView, view, nullptr, false );
-        auto iptr = worker.GetInlineSymbolList( m_baseAddr, m_codeLen );
+        auto iptr = worker.GetInlineSymbolList( m_baseAddr, m_symLen );
         if( iptr )
         {
-            const auto symEnd = m_baseAddr + m_codeLen;
+            const auto symEnd = m_baseAddr + m_symLen;
             while( *iptr < symEnd )
             {
                 GatherIpStats( *iptr, as, worker, limitView, view, nullptr, false );
@@ -3020,7 +3042,7 @@ void SourceView::RenderLine( const Tokenizer::Line& line, int lineNum, const Add
         {
             for( auto& addr : *addresses )
             {
-                if( addr >= m_baseAddr && addr < m_baseAddr + m_codeLen )
+                if( addr >= m_baseAddr && addr < m_baseAddr + m_symLen )
                 {
                     if( !m_calcInlineStats || worker->GetInlineSymbolForAddress( addr ) == m_symAddr )
                     {
@@ -3415,11 +3437,11 @@ void SourceView::RenderAsmLine( AsmLine& line, const AddrStat& ipcnt, const Addr
             if( hover )
             {
                 uint64_t symAddrParents = m_baseAddr;
-                auto inlineList = worker.GetInlineSymbolList( m_baseAddr, m_codeLen );
+                auto inlineList = worker.GetInlineSymbolList( m_baseAddr, m_symLen );
                 if( inlineList )
                 {
                     const auto cfi = worker.PackPointer( line.addr );
-                    const auto symEnd = m_baseAddr + m_codeLen;
+                    const auto symEnd = m_baseAddr + m_symLen;
                     while( *inlineList < symEnd )
                     {
                         auto ipmap = worker.GetSymbolInstructionPointers( *inlineList );
@@ -4685,7 +4707,7 @@ void SourceView::SelectAsmLines( uint32_t file, uint32_t line, const Worker& wor
         {
             for( auto& v : addr )
             {
-                if( v >= m_baseAddr && v < m_baseAddr + m_codeLen )
+                if( v >= m_baseAddr && v < m_baseAddr + m_symLen )
                 {
                     if( IsInContext( worker, v ) ) m_selectedAddresses.emplace( v );
                 }
@@ -4740,7 +4762,7 @@ void SourceView::SelectAsmLinesHover( uint32_t file, uint32_t line, const Worker
     {
         for( auto& v : *addresses )
         {
-            if( v >= m_baseAddr && v < m_baseAddr + m_codeLen )
+            if( v >= m_baseAddr && v < m_baseAddr + m_symLen )
             {
                 if( IsInContext( worker, v ) ) m_selectedAddressesHover.emplace( v );
             }

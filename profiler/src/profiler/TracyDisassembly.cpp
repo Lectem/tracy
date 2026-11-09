@@ -721,10 +721,10 @@ nlohmann::json JsonDisassembly( uint64_t symAddr, Worker& worker, const View& vi
     // invisible UI state, which would silently scope the reported costs.
     AddrStatData as;
     GatherIpStats( symAddr, as, worker, false, view, nullptr, false );
-    auto iptr = worker.GetInlineSymbolList( symAddr, data.codeLen );
+    auto iptr = worker.GetInlineSymbolList( symAddr, sym->size.Val() );
     if( iptr )
     {
-        const auto symEnd = symAddr + data.codeLen;
+        const auto symEnd = symAddr + sym->size.Val();
         while( *iptr < symEnd )
         {
             GatherIpStats( *iptr, as, worker, false, view, nullptr, false );

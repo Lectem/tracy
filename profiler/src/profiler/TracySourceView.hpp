@@ -136,6 +136,7 @@ private:
     DecayValue<uint32_t> m_hoveredSource;
     int m_displayMode;
     uint32_t m_codeLen;
+    uint32_t m_symLen;
     int32_t m_disasmFail;
     DecayValue<uint64_t> m_highlightAddr;
     int m_asmCountBase;
@@ -166,6 +167,7 @@ private:
     bool m_locAddrIsProp;
 
     unordered_flat_map<uint32_t, uint32_t> m_sourceFiles;
+    unordered_flat_map<const char*, bool> m_sourceFileValid;
     unordered_flat_set<uint64_t> m_selectedAddresses;
     unordered_flat_set<uint64_t> m_selectedAddressesHover;
 
