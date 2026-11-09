@@ -1226,6 +1226,7 @@ Worker::Worker( FileRead& f, EventType::Type eventMask, bool bgTasks, bool allow
         CallstackFrameId id;
         auto frameData = m_slab.Alloc<CallstackFrameData>();
         f.Read3( id, frameData->size, frameData->imageName );
+        CheckProfiledImage( frameData->imageName );
 
         frameData->data = m_slab.Alloc<CallstackFrame>( frameData->size );
         f.Read( frameData->data, sizeof( CallstackFrame ) * frameData->size );
@@ -6769,6 +6770,7 @@ void Worker::ProcessCallstackFrameSize( const QueueCallstackFrameSize& ev )
         m_callstackFrameStaging->size = ev.size;
         m_callstackFrameStaging->data = m_slab.Alloc<CallstackFrame>( ev.size );
         m_callstackFrameStaging->imageName = StringIdx( idx );
+        CheckProfiledImage( m_callstackFrameStaging->imageName );
 
         m_callstackFrameStagingPtr = ev.ptr;
     }
@@ -9074,9 +9076,25 @@ static bool IsFrameExternalImpl( const char* filename, const char* image )
     return IsSourceExternalImpl( filename );
 }
 
+// The profiled program's image is never external, even when it lives under /usr (a stock distribution binary, e.g.
+// profiled with tracy-monitor). Its frames are then classified by their source files only, as if the binary was
+// installed elsewhere. Matched once per image string, by file name against the program name sent by the client.
+void Worker::CheckProfiledImage( StringIdx image )
+{
+    if( m_profiledImage.Active() || !image.Active() || m_captureProgram.empty() ) return;
+    const char* str = GetString( image );
+    const char* base = str;
+    for( const char* ptr = str; *ptr; ptr++ )
+    {
+        if( *ptr == '/' || *ptr == '\\' ) base = ptr + 1;
+    }
+    if( strcmp( base, m_captureProgram.c_str() ) == 0 ) m_profiledImage = image;
+}
+
 bool Worker::IsFrameExternal( StringIdx filename, StringIdx image ) const
 {
-    return IsFrameExternalImpl( GetString( filename ), image.Active() ? GetString( image ) : nullptr );
+    const bool imageExternal = image.Active() && !( image == m_profiledImage );
+    return IsFrameExternalImpl( GetString( filename ), imageExternal ? GetString( image ) : nullptr );
 }
 
 bool Worker::IsImageExternalBody( StringIdx image, uint32_t key, unordered_flat_map<uint32_t, bool>& cache, uint32_t& last ) const
@@ -9088,7 +9106,7 @@ bool Worker::IsImageExternalBody( StringIdx image, uint32_t key, unordered_flat_
         return it->second;
     }
 
-    const auto res = IsImageExternalImpl( GetString( image ) );
+    const auto res = !( image == m_profiledImage ) && IsImageExternalImpl( GetString( image ) );
     cache.emplace( key, res );
 
     last = key | ( res << 24 );

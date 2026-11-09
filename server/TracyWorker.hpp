@@ -1076,6 +1076,8 @@ private:
     bool IsImageExternalBody( StringIdx image, uint32_t key, unordered_flat_map<uint32_t, bool>& cache, uint32_t& last ) const;
     bool IsSourceExternalBody( StringIdx filename, uint32_t key,unordered_flat_map<uint32_t, bool>& cache, uint32_t& last ) const;
 
+    void CheckProfiledImage( StringIdx image );
+
     void UpdateMbps( int64_t td );
 
     int64_t ReadTimeline( FileRead& f, Vector<short_ptr<ZoneEvent>>& vec, uint32_t size, int64_t refTime, int32_t& childIdx );
@@ -1109,6 +1111,7 @@ private:
     double m_timerMul;
     std::string m_captureName;
     std::string m_captureProgram;
+    StringIdx m_profiledImage;
     uint64_t m_captureTime;
     uint64_t m_executableTime;
     std::string m_hostInfo;
