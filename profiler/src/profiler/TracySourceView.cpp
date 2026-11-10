@@ -3437,11 +3437,11 @@ void SourceView::RenderAsmLine( AsmLine& line, const AddrStat& ipcnt, const Addr
             if( hover )
             {
                 uint64_t symAddrParents = m_baseAddr;
-                auto inlineList = worker.GetInlineSymbolList( m_baseAddr, m_symLen );
+                auto inlineList = worker.GetInlineSymbolList( m_baseAddr, m_codeLen );
                 if( inlineList )
                 {
                     const auto cfi = worker.PackPointer( line.addr );
-                    const auto symEnd = m_baseAddr + m_symLen;
+                    const auto symEnd = m_baseAddr + m_codeLen;
                     while( *inlineList < symEnd )
                     {
                         auto ipmap = worker.GetSymbolInstructionPointers( *inlineList );
@@ -4707,7 +4707,7 @@ void SourceView::SelectAsmLines( uint32_t file, uint32_t line, const Worker& wor
         {
             for( auto& v : addr )
             {
-                if( v >= m_baseAddr && v < m_baseAddr + m_symLen )
+                if( v >= m_baseAddr && v < m_baseAddr + m_codeLen )
                 {
                     if( IsInContext( worker, v ) ) m_selectedAddresses.emplace( v );
                 }
@@ -4762,7 +4762,7 @@ void SourceView::SelectAsmLinesHover( uint32_t file, uint32_t line, const Worker
     {
         for( auto& v : *addresses )
         {
-            if( v >= m_baseAddr && v < m_baseAddr + m_symLen )
+            if( v >= m_baseAddr && v < m_baseAddr + m_codeLen )
             {
                 if( IsInContext( worker, v ) ) m_selectedAddressesHover.emplace( v );
             }
